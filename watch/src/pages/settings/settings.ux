@@ -35,11 +35,11 @@
       <div class="card" if="{{customBrightness}}">
         <text class="card-title" style="font-size: {{brTitleFont}}px;">{{strings.brightness}}</text>
         <div class="ctrl-row">
-          <div class="ctrl-btn" @click="changeBrightness(-5)">
+          <div class="ctrl-btn" @click="changeBrightness(-10)">
             <text class="ctrl-btn-txt">-</text>
           </div>
           <text class="ctrl-val">{{brightnessPct}}%</text>
-          <div class="ctrl-btn" @click="changeBrightness(5)">
+          <div class="ctrl-btn" @click="changeBrightness(10)">
             <text class="ctrl-btn-txt">+</text>
           </div>
         </div>
@@ -93,15 +93,13 @@
         <text class="storage-line-free">{{strings.storageFree}}: {{freeSpaceText}}</text>
       </div>
 
-      <div class="card">
-        <text class="card-title" style="font-size: {{delAllTitleFont}}px;">{{strings.deleteAllBooks}}</text>
+      <div class="card-double">
+        <text class="card-title" style="font-size: {{cleanCardTitleFont}}px;">{{strings.resetAndCleanTitle}}</text>
+
         <div class="toggle-btn {{confirmDeleteAll ? 'toggle-on' : 'toggle-off'}}" @click="onDeleteAllTap">
           <text class="{{confirmDeleteAll ? 'toggle-txt-on' : 'toggle-txt-off'}}" style="font-size: {{delAllBtnFont}}px;">{{deletedAllDone ? strings.deleteAllDone : (confirmDeleteAll ? strings.deleteAllConfirm : strings.deleteAllBtn)}}</text>
         </div>
-      </div>
 
-      <div class="card">
-        <text class="card-title" style="font-size: {{resetTitleFont}}px;">{{strings.resetSettings}}</text>
         <div class="toggle-btn {{confirmReset ? 'toggle-on' : 'toggle-off'}}" @click="onResetTap">
           <text class="{{confirmReset ? 'toggle-txt-on' : 'toggle-txt-off'}}" style="font-size: {{resetBtnFont}}px;">{{confirmReset ? strings.resetConfirm : strings.resetSettings}}</text>
         </div>
@@ -151,9 +149,8 @@ export default {
     fontTitleFont: 20,
     bufTitleFont: 20,
     padTitleFont: 20,
-    delAllTitleFont: 20,
+    cleanCardTitleFont: 20,
     delAllBtnFont: 18,
-    resetTitleFont: 20,
     resetBtnFont: 18,
     booksCount: 0,
     booksSizeText: '0 KB',
@@ -200,12 +197,11 @@ export default {
     this.fontTitleFont = fitFontSize(s.fontSize, 172, 20, 15, false);
     this.bufTitleFont = fitFontSize(s.bufferSize, 172, 20, 15, false);
     this.padTitleFont = fitFontSize(s.edgePadding, 172, 20, 15, false);
-    this.delAllTitleFont = fitFontSize(s.deleteAllBooks, 172, 20, 15, false);
+    this.cleanCardTitleFont = fitFontSize(s.resetAndCleanTitle, 172, 20, 15, false);
     const delBtnTxt = this.deletedAllDone ? s.deleteAllDone : (this.confirmDeleteAll ? s.deleteAllConfirm : s.deleteAllBtn);
-    this.delAllBtnFont = fitFontSize(delBtnTxt, 164, 20, 14, true);
-    this.resetTitleFont = fitFontSize(s.resetSettings, 172, 20, 15, false);
+    this.delAllBtnFont = fitFontSize(delBtnTxt, 164, 19, 14, true);
     const resetBtnTxt = this.confirmReset ? s.resetConfirm : s.resetSettings;
-    this.resetBtnFont = fitFontSize(resetBtnTxt, 164, 20, 14, true);
+    this.resetBtnFont = fitFontSize(resetBtnTxt, 164, 19, 14, true);
   },
 
   loadSavedSettings() {
@@ -348,11 +344,11 @@ export default {
   changeBrightness(delta) {
     if (!this.customBrightness) return;
     if (this.brightnessPct === 1 && delta > 0) {
-      this.brightnessPct = 5;
-    } else if (this.brightnessPct === 5 && delta < 0) {
+      this.brightnessPct = 10;
+    } else if (this.brightnessPct === 10 && delta < 0) {
       this.brightnessPct = 1;
     } else {
-      const next = Math.round((this.brightnessPct + delta) / 5) * 5;
+      const next = Math.round((this.brightnessPct + delta) / 10) * 10;
       this.brightnessPct = Math.max(1, Math.min(100, next));
     }
     this.markModified();
@@ -566,6 +562,19 @@ export default {
   align-items: center;
 }
 
+.card-double {
+  width: 200px;
+  height: 218px;
+  flex-shrink: 0;
+  background-color: #1A1A1A;
+  border-radius: 26px;
+  padding: 12px 10px;
+  margin-bottom: 10px;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .storage-card {
   width: 200px;
   height: 176px;
@@ -620,7 +629,7 @@ export default {
 
 .toggle-btn {
   width: 176px;
-  height: 62px;
+  height: 60px;
   flex-shrink: 0;
   border-radius: 22px;
   padding: 0 6px;
