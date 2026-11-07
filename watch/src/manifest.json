@@ -1,0 +1,47 @@
+{
+  "package": "com.band.wristbook",
+  "name": "Wrist Book",
+  "versionName": "1.0.0",
+  "versionCode": 100,
+  "minPlatformVersion": 1100,
+  "icon": "/common/logo.png",
+  "deviceTypeList": [
+    "watch"
+  ],
+  "features": [
+    { "name": "system.router" },
+    { "name": "system.storage" },
+    { "name": "system.prompt" },
+    { "name": "system.file" },
+    { "name": "system.interconnect" },
+    { "name": "system.brightness" },
+    { "name": "system.battery" },
+    { "name": "system.configuration" }
+  ],
+  "config": {
+    "logLevel": "log",
+    "designWidth": 212
+  },
+  "router": {
+    "entry": "pages/shelf",
+    "pages": {
+      "pages/shelf": {
+        "component": "shelf",
+        "launchMode": "singleTask"
+      },
+      "pages/reader": {
+        "component": "reader"
+      },
+      "pages/settings": {
+        "component": "settings"
+      },
+      "pages/transfer": {
+        "component": "transfer",
+        "launchMode": "singleTask"
+      }
+    }
+  },
+  "display": {
+    "backgroundColor": "#000000"
+  }
+}

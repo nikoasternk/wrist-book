@@ -1,0 +1,412 @@
+<template>
+  <div class="reader-page">
+    <div class="status-bar">
+      <text class="status-txt">{{clockTime}}</text>
+      <text class="status-txt">{{batteryLevel}}%</text>
+    </div>
+
+    <scroll
+      id="scrollViewport"
+      class="scroll-area"
+      scroll-y="true"
+      @click="toggleMenu">
+
+      <div class="content-container" style="padding-top: {{paddingY}}px; padding-bottom: {{paddingY}}px;">
+        <div class="nav-btn-box" if="{{charOffset > 0}}" @click="loadPrevWindow">
+          <text class="nav-btn-txt">{{strings.prevBlock}}</text>
+        </div>
+
+        <text
+          class="book-text"
+          style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px; color: rgba(255,255,255,{{brightnessPct / 100}});">
+          {{windowText}}
+        </text>
+
+        <div class="nav-btn-box" if="{{hasMore}}" @click="loadNextWindow">
+          <text class="nav-btn-txt">{{strings.nextBlock}} ({{progressPercent}}%) ↓</text>
+        </div>
+      </div>
+    </scroll>
+
+    <div class="menu-overlay" if="{{menuVisible}}">
+      <scroll class="menu-scroll" scroll-y="true">
+        <div class="menu-inner">
+          <div class="overlay-btn" @click="goBack">
+            <text class="overlay-btn-txt">{{strings.backToShelf}}</text>
+          </div>
+          <div class="overlay-btn" @click="openSettings">
+            <text class="overlay-btn-txt">{{strings.settings}}</text>
+          </div>
+          <div class="overlay-btn delete-btn" @click="deleteBook">
+            <text class="delete-btn-txt">{{confirmDelete ? strings.confirmDelete : strings.deleteBook}}</text>
+          </div>
+          <div class="overlay-btn" @click="toggleMenu">
+            <text class="overlay-btn-txt">{{strings.closeMenu}}</text>
+          </div>
+        </div>
+      </scroll>
+    </div>
+  </div>
+</template>
+
+<script>
+import battery from '@system.battery'
+import brightness from '@system.brightness'
+import storage from '@system.storage'
+import file from '@system.file'
+import router from '@system.router'
+import { getStrings } from '../../services/Localization'
+
+export default {
+  private: {
+    strings: getStrings('auto'),
+    clockTime: '00:00',
+    batteryLevel: 100,
+    menuVisible: false,
+    stayAwake: true,
+    brightnessPct: 100,
+    confirmDelete: false,
+    fontSize: 30,
+    lineHeight: 40,
+    paddingY: 38,
+    windowChars: 1500,
+    minWindowChars: 400,
+    charOffset: 0,
+    totalChars: 0,
+    bookUri: '',
+    bookName: '',
+    windowText: '',
+    hasMore: false,
+    progressPercent: 0,
+    clockTimer: null
+  },
+
+  protected: {
+    uri: '',
+    name: ''
+  },
+
+  onInit() {
+    this.bookUri = this.uri;
+    this.bookName = this.name;
+    this.windowText = this.strings.loading;
+    this.updateClock();
+    this.clockTimer = setInterval(() => this.updateClock(), 20000);
+    this.updateBattery();
+  },
+
+  onShow() {
+    this.confirmDelete = false;
+    this.loadSettingsAndRead();
+  },
+
+  onHide() {
+    brightness.setKeepScreenOn({ keepScreenOn: false });
+  },
+
+  onDestroy() {
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    brightness.setKeepScreenOn({ keepScreenOn: false });
+  },
+
+  loadSettingsAndRead() {
+    storage.get({
+      key: 'WRISTBOOK_CONFIG',
+      success: (data) => {
+        let lang = 'auto';
+        if (data) {
+          const cfg = JSON.parse(data);
+          this.fontSize = cfg.fontSize || 30;
+          this.lineHeight = Math.floor(this.fontSize * 1.35);
+          this.windowChars = Math.max(cfg.windowChars || 1500, this.minWindowChars);
+          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 38;
+          this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
+          this.brightnessPct = cfg.brightnessPct || 100;
+          lang = cfg.language || 'auto';
+        }
+        this.strings = getStrings(lang);
+        const hwVal = Math.max(10, Math.min(255, Math.round(this.brightnessPct * 2.55)));
+        brightness.setMode({ mode: 0 });
+        brightness.setValue({ value: hwVal });
+        brightness.setKeepScreenOn({ keepScreenOn: this.stayAwake });
+        this.initFileMetrics();
+      },
+      fail: () => {
+        this.strings = getStrings('auto');
+        brightness.setKeepScreenOn({ keepScreenOn: true });
+        this.initFileMetrics();
+      }
+    });
+  },
+
+  initFileMetrics() {
+    file.get({
+      uri: this.bookUri,
+      success: (meta) => {
+        this.totalChars = Math.floor(meta.length / 2);
+        this.restoreBookOffset();
+      },
+      fail: () => {
+        this.windowText = this.strings.fileError;
+      }
+    });
+  },
+
+  restoreBookOffset() {
+    storage.get({
+      key: 'WRISTBOOK_PROGRESS',
+      success: (data) => {
+        const map = data ? JSON.parse(data) : {};
+        if (map[this.bookName] && map[this.bookName].charOffset) {
+          this.charOffset = map[this.bookName].charOffset;
+        } else {
+          this.charOffset = 0;
+        }
+        this.renderWindow();
+      },
+      fail: () => {
+        this.charOffset = 0;
+        this.renderWindow();
+      }
+    });
+  },
+
+  renderWindow() {
+    if (this.totalChars <= 0) {
+      this.windowText = this.strings.emptyFile;
+      this.hasMore = false;
+      return;
+    }
+
+    if (this.charOffset >= this.totalChars) {
+      this.charOffset = Math.max(0, this.totalChars - this.windowChars);
+    }
+
+    let charsToRead = this.windowChars;
+    if (this.charOffset + charsToRead > this.totalChars) {
+      charsToRead = this.totalChars - this.charOffset;
+    }
+
+    file.readArrayBuffer({
+      uri: this.bookUri,
+      position: this.charOffset * 2,
+      length: charsToRead * 2,
+      success: (res) => {
+        let str = '';
+        const buf = res.buffer;
+        for (let i = 0; i + 1 < buf.length; i += 2) {
+          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
+        }
+        this.windowText = str;
+        this.hasMore = (this.charOffset + charsToRead) < this.totalChars;
+        this.progressPercent = Math.min(100, Math.floor(((this.charOffset + charsToRead) / this.totalChars) * 100));
+
+        try {
+          this.$element('scrollViewport').scrollTo({ top: 0, behavior: 'instant' });
+        } catch (e) {}
+
+        this.saveProgress();
+      },
+      fail: () => {
+        this.windowText = this.strings.readError;
+      }
+    });
+  },
+
+  loadNextWindow() {
+    if (this.charOffset + this.windowChars < this.totalChars) {
+      this.charOffset += this.windowChars;
+      this.renderWindow();
+    }
+  },
+
+  loadPrevWindow() {
+    if (this.charOffset > 0) {
+      this.charOffset = Math.max(0, this.charOffset - this.windowChars);
+      this.renderWindow();
+    }
+  },
+
+  saveProgress() {
+    storage.get({
+      key: 'WRISTBOOK_PROGRESS',
+      success: (data) => {
+        const map = data ? JSON.parse(data) : {};
+        map[this.bookName] = {
+          charOffset: this.charOffset,
+          percent: this.progressPercent
+        };
+        storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
+      },
+      fail: () => {
+        const map = {};
+        map[this.bookName] = {
+          charOffset: this.charOffset,
+          percent: this.progressPercent
+        };
+        storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
+      }
+    });
+  },
+
+  deleteBook() {
+    if (!this.confirmDelete) {
+      this.confirmDelete = true;
+      return;
+    }
+    file.delete({
+      uri: this.bookUri,
+      complete: () => {
+        router.back();
+      }
+    });
+  },
+
+  updateClock() {
+    const d = new Date();
+    this.clockTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  },
+
+  updateBattery() {
+    battery.getStatus({
+      success: (res) => {
+        this.batteryLevel = Math.floor(res.level * 100);
+      }
+    });
+  },
+
+  toggleMenu() {
+    this.menuVisible = !this.menuVisible;
+    this.confirmDelete = false;
+    this.updateBattery();
+  },
+
+  openSettings() {
+    this.menuVisible = false;
+    router.push({ uri: 'pages/settings' });
+  },
+
+  goBack() {
+    router.back();
+  }
+}
+</script>
+
+<style>
+.reader-page {
+  width: 212px;
+  height: 520px;
+  background-color: #000000;
+  flex-direction: column;
+}
+
+.status-bar {
+  position: absolute;
+  top: 4px;
+  left: 0px;
+  width: 212px;
+  height: 32px;
+  padding: 0 18px;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+}
+
+.status-txt {
+  color: #888888;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.scroll-area {
+  width: 212px;
+  height: 520px;
+}
+
+.content-container {
+  width: 212px;
+  padding-left: 6px;
+  padding-right: 6px;
+  flex-direction: column;
+}
+
+.book-text {
+  width: 200px;
+  font-weight: bold;
+  text-align: left;
+  lines: -1;
+}
+
+.nav-btn-box {
+  width: 200px;
+  min-height: 86px;
+  padding: 16px 10px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  background-color: #262626;
+  border-radius: 28px;
+  justify-content: center;
+  align-items: center;
+}
+
+.nav-btn-txt {
+  color: #4C8DFF;
+  font-size: 28px;
+  font-weight: bold;
+  text-align: center;
+  lines: -1;
+}
+
+.menu-overlay {
+  position: absolute;
+  top: 0px;
+  left: 0px;
+  width: 212px;
+  height: 520px;
+  background-color: rgba(0, 0, 0, 0.94);
+  z-index: 30;
+}
+
+.menu-scroll {
+  width: 212px;
+  height: 520px;
+}
+
+.menu-inner {
+  width: 212px;
+  padding: 40px 6px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.overlay-btn {
+  width: 200px;
+  min-height: 82px;
+  padding: 14px 10px;
+  margin-bottom: 12px;
+  background-color: #262626;
+  border-radius: 28px;
+  justify-content: center;
+  align-items: center;
+}
+
+.overlay-btn-txt {
+  color: #FFFFFF;
+  font-size: 28px;
+  font-weight: bold;
+  text-align: center;
+  lines: -1;
+}
+
+.delete-btn {
+  background-color: #3B1818;
+}
+
+.delete-btn-txt {
+  color: #FF6B6B;
+  font-size: 28px;
+  font-weight: bold;
+  text-align: center;
+  lines: -1;
+}
+</style>
