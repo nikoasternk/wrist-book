@@ -10,14 +10,13 @@
 
       <div class="edge-pad" style="height: {{paddingY}}px;"></div>
 
-      <div for="{{segments}}" tid="id" class="segment-wrapper">
-        <div
-          if="{{$item.unloaded}}"
-          class="placeholder-box"
-          style="height: {{$item.height}}px;">
-        </div>
+      <div
+        for="{{segments}}"
+        tid="id"
+        id="seg_{{$item.id}}"
+        class="segment-wrapper"
+        style="height: {{$item.boxHeight}};">
         <text
-          else
           class="book-text"
           style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
       </div>
@@ -50,7 +49,7 @@ export default {
     lineHeight: 38,
     paddingY: 36,
     windowChars: 2000,
-    chunkSize: 300,
+    chunkSize: 350,
     totalChars: 0,
     bookUri: '',
     bookName: '',
@@ -58,11 +57,13 @@ export default {
     nextUniqueId: 1,
     isBusy: false,
     lastKnownScrollHeight: 0,
+    lastScrollY: 0,
     currentActiveIndex: 0,
     lastActiveCharOffset: 0,
     progressPercent: 0,
     clockTimer: null,
-    saveTimer: null
+    saveTimer: null,
+    pruneTimer: null
   },
 
   protected: {
@@ -92,6 +93,7 @@ export default {
   onDestroy() {
     if (this.clockTimer) clearInterval(this.clockTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
     this.flushProgressNow();
     brightness.setKeepScreenOn({ keepScreenOn: false });
   },
@@ -106,7 +108,7 @@ export default {
           this.fontSize = Math.max(8, Math.min(48, cfg.fontSize || 28));
           this.lineHeight = Math.max(10, Math.floor(this.fontSize * 1.35));
           this.windowChars = Math.max(1000, cfg.windowChars || 2000);
-          this.chunkSize = 300;
+          this.chunkSize = 350;
           this.paddingY = Math.max(16, Math.min(120, cfg.paddingY !== undefined ? cfg.paddingY : 36));
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.customBrightness = cfg.customBrightness === true;
@@ -147,7 +149,7 @@ export default {
           startChar: 0,
           charLen: 0,
           text: this.strings.fileError,
-          height: 200,
+          boxHeight: 'auto',
           unloaded: false
         }];
       }
@@ -221,6 +223,26 @@ export default {
     });
   },
 
+  measureSegmentDomHeight(segId, fallbackDelta, callback) {
+    const el = this.$element('seg_' + segId);
+    if (el && el.getBoundingClientRect) {
+      el.getBoundingClientRect({
+        success: (rect) => {
+          if (rect && rect.height > 10) {
+            callback(rect.height);
+          } else {
+            callback(fallbackDelta);
+          }
+        },
+        fail: () => {
+          callback(fallbackDelta);
+        }
+      });
+    } else {
+      callback(fallbackDelta);
+    }
+  },
+
   getScrollHeight(callback) {
     const scroller = this.$element('scrollViewport');
     if (!scroller || !scroller.getScrollRect) {
@@ -237,6 +259,14 @@ export default {
     });
   },
 
+  recalculateTotalKnownHeight() {
+    let sum = this.paddingY * 2;
+    for (let i = 0; i < this.segments.length; i++) {
+      sum += (this.measuredHeights[this.segments[i].id] || 280);
+    }
+    this.lastKnownScrollHeight = sum;
+  },
+
   startReadingSession(savedOffset) {
     if (this.totalChars <= 0) {
       this.segments = [{
@@ -244,7 +274,7 @@ export default {
         startChar: 0,
         charLen: 0,
         text: this.strings.emptyFile,
-        height: 200,
+        boxHeight: 'auto',
         unloaded: false
       }];
       return;
@@ -271,38 +301,45 @@ export default {
             startChar: prevStart,
             charLen: prevDesired,
             text: prevText,
-            height: 300,
+            boxHeight: 'auto',
             unloaded: false
           }];
 
           setTimeout(() => {
             this.getScrollHeight((h1) => {
-              const seg1RealHeight = Math.max(40, h1 - (this.paddingY * 2));
-              this.measuredHeights[id1] = seg1RealHeight;
+              const fallbackH1 = Math.max(40, h1 - (this.paddingY * 2));
+              this.measureSegmentDomHeight(id1, fallbackH1, (seg1RealHeight) => {
+                this.measuredHeights[id1] = seg1RealHeight;
+                this.segments[0].boxHeight = seg1RealHeight + 'px';
 
-              this.readCleanSlice(clampedOffset, this.chunkSize * 2, (currText, currLen) => {
-                const id2 = this.nextUniqueId++;
-                this.segments.push({
-                  id: id2,
-                  startChar: clampedOffset,
-                  charLen: currLen,
-                  text: currText || '',
-                  height: 300,
-                  unloaded: false
-                });
-                this.currentActiveIndex = 1;
-
-                setTimeout(() => {
-                  this.getScrollHeight((h2) => {
-                    const seg2RealHeight = Math.max(40, h2 - h1);
-                    this.measuredHeights[id2] = seg2RealHeight;
-                    this.lastKnownScrollHeight = h2;
-                    try {
-                      this.$element('scrollViewport').scrollTo({ top: seg1RealHeight, behavior: 'instant' });
-                    } catch (e) {}
-                    this.isBusy = false;
+                this.readCleanSlice(clampedOffset, this.chunkSize * 2, (currText, currLen) => {
+                  const id2 = this.nextUniqueId++;
+                  this.segments.push({
+                    id: id2,
+                    startChar: clampedOffset,
+                    charLen: currLen,
+                    text: currText || '',
+                    boxHeight: 'auto',
+                    unloaded: false
                   });
-                }, 30);
+                  this.currentActiveIndex = 1;
+
+                  setTimeout(() => {
+                    this.getScrollHeight((h2) => {
+                      const fallbackH2 = Math.max(40, h2 - h1);
+                      this.measureSegmentDomHeight(id2, fallbackH2, (seg2RealHeight) => {
+                        this.measuredHeights[id2] = seg2RealHeight;
+                        this.segments[1].boxHeight = seg2RealHeight + 'px';
+                        this.recalculateTotalKnownHeight();
+                        this.lastScrollY = seg1RealHeight;
+                        try {
+                          this.$element('scrollViewport').scrollTo({ top: seg1RealHeight, behavior: 'instant' });
+                        } catch (e) {}
+                        this.isBusy = false;
+                      });
+                    });
+                  }, 30);
+                });
               });
             });
           }, 30);
@@ -319,16 +356,20 @@ export default {
           startChar: 0,
           charLen: firstLen,
           text: firstText || '',
-          height: 300,
+          boxHeight: 'auto',
           unloaded: false
         }];
         this.currentActiveIndex = 0;
 
         setTimeout(() => {
           this.getScrollHeight((h1) => {
-            this.measuredHeights[id1] = Math.max(40, h1 - (this.paddingY * 2));
-            this.lastKnownScrollHeight = h1;
-            this.isBusy = false;
+            const fallbackH1 = Math.max(40, h1 - (this.paddingY * 2));
+            this.measureSegmentDomHeight(id1, fallbackH1, (seg1RealHeight) => {
+              this.measuredHeights[id1] = seg1RealHeight;
+              this.segments[0].boxHeight = seg1RealHeight + 'px';
+              this.recalculateTotalKnownHeight();
+              this.isBusy = false;
+            });
           });
         }, 30);
       });
@@ -358,38 +399,30 @@ export default {
         return;
       }
 
-      const maxActiveCount = Math.max(4, Math.ceil(this.windowChars / this.chunkSize));
-      const allowedRadius = Math.max(2, Math.floor(maxActiveCount / 2));
-      const newCenterIdx = this.segments.length;
-
-      for (let i = 0; i < this.segments.length; i++) {
-        const seg = this.segments[i];
-        if (!seg.unloaded && (newCenterIdx - i) > allowedRadius && this.measuredHeights[seg.id]) {
-          seg.height = this.measuredHeights[seg.id];
-          seg.unloaded = true;
-          seg.text = '';
-        }
-      }
-
       const newId = this.nextUniqueId++;
       this.segments.push({
         id: newId,
         startChar: nextStart,
         charLen: actualLen,
         text: str,
-        height: 300,
+        boxHeight: 'auto',
         unloaded: false
       });
+      const pushedIdx = this.segments.length - 1;
 
       setTimeout(() => {
         this.getScrollHeight((heightAfter) => {
-          if (heightAfter > heightBefore && heightBefore > 0) {
-            this.measuredHeights[newId] = heightAfter - heightBefore;
-          }
-          if (heightAfter > 0) {
-            this.lastKnownScrollHeight = heightAfter;
-          }
-          this.isBusy = false;
+          const fallbackDelta = (heightAfter > heightBefore && heightBefore > 0) ? (heightAfter - heightBefore) : 260;
+          this.measureSegmentDomHeight(newId, fallbackDelta, (exactH) => {
+            this.measuredHeights[newId] = exactH;
+            if (this.segments[pushedIdx] && this.segments[pushedIdx].id === newId) {
+              this.segments[pushedIdx].boxHeight = exactH + 'px';
+            }
+            this.recalculateTotalKnownHeight();
+            this.isBusy = false;
+            this.scheduleIdlePrune();
+            this.processViewportAt(this.lastScrollY);
+          });
         });
       }, 25);
     });
@@ -423,39 +456,33 @@ export default {
       length: charsToRead * 2,
       success: (res) => {
         const str = this.decodeBufferFast(res.buffer);
-        const maxActiveCount = Math.max(4, Math.ceil(this.windowChars / this.chunkSize));
-
-        for (let i = maxActiveCount; i < this.segments.length; i++) {
-          const seg = this.segments[i];
-          if (!seg.unloaded && this.measuredHeights[seg.id]) {
-            seg.height = this.measuredHeights[seg.id];
-            seg.unloaded = true;
-            seg.text = '';
-          }
-        }
-
         const newId = this.nextUniqueId++;
         this.segments.unshift({
           id: newId,
           startChar: prevStart,
           charLen: charsToRead,
           text: str,
-          height: 300,
+          boxHeight: 'auto',
           unloaded: false
         });
         this.currentActiveIndex = 0;
 
         setTimeout(() => {
           this.getScrollHeight((heightAfter) => {
-            const addedHeight = Math.max(40, heightAfter - heightBefore);
-            this.measuredHeights[newId] = addedHeight;
-            if (heightAfter > 0) {
-              this.lastKnownScrollHeight = heightAfter;
-            }
-            try {
-              this.$element('scrollViewport').scrollTo({ top: addedHeight, behavior: 'instant' });
-            } catch (e) {}
-            this.isBusy = false;
+            const fallbackAdded = Math.max(40, heightAfter - heightBefore);
+            this.measureSegmentDomHeight(newId, fallbackAdded, (addedHeight) => {
+              this.measuredHeights[newId] = addedHeight;
+              if (this.segments[0] && this.segments[0].id === newId) {
+                this.segments[0].boxHeight = addedHeight + 'px';
+              }
+              this.recalculateTotalKnownHeight();
+              this.lastScrollY = addedHeight;
+              try {
+                this.$element('scrollViewport').scrollTo({ top: addedHeight, behavior: 'instant' });
+              } catch (e) {}
+              this.isBusy = false;
+              this.scheduleIdlePrune();
+            });
           });
         }, 25);
       },
@@ -463,6 +490,33 @@ export default {
         this.isBusy = false;
       }
     });
+  },
+
+  scheduleIdlePrune() {
+    if (this.pruneTimer) {
+      clearTimeout(this.pruneTimer);
+    }
+    this.pruneTimer = setTimeout(() => {
+      this.pruneTimer = null;
+      if (!this.isBusy) {
+        this.pruneDistantSegments();
+      }
+    }, 260);
+  },
+
+  pruneDistantSegments() {
+    const maxActiveCount = Math.max(5, Math.ceil(this.windowChars / this.chunkSize) + 1);
+    const allowedRadius = Math.max(2, Math.floor(maxActiveCount / 2));
+    const center = this.currentActiveIndex;
+
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i];
+      if (!seg.unloaded && Math.abs(i - center) > allowedRadius && this.measuredHeights[seg.id]) {
+        seg.boxHeight = this.measuredHeights[seg.id] + 'px';
+        seg.text = '';
+        seg.unloaded = true;
+      }
+    }
   },
 
   reloadUnloadedSegment(index) {
@@ -477,22 +531,12 @@ export default {
       length: seg.charLen * 2,
       success: (res) => {
         const str = this.decodeBufferFast(res.buffer);
-        const maxActiveCount = Math.max(4, Math.ceil(this.windowChars / this.chunkSize));
-        const allowedRadius = Math.max(2, Math.floor(maxActiveCount / 2));
-
-        for (let i = 0; i < this.segments.length; i++) {
-          const other = this.segments[i];
-          if (i !== index && !other.unloaded && Math.abs(i - index) > allowedRadius && this.measuredHeights[other.id]) {
-            other.height = this.measuredHeights[other.id];
-            other.unloaded = true;
-            other.text = '';
-          }
-        }
-
         seg.text = str;
         seg.unloaded = false;
         this.currentActiveIndex = index;
         this.isBusy = false;
+        this.scheduleIdlePrune();
+        this.processViewportAt(this.lastScrollY);
       },
       fail: () => {
         this.isBusy = false;
@@ -503,24 +547,25 @@ export default {
   onScrollMove(evt) {
     if (!evt || evt.scrollY === undefined || this.segments.length === 0) return;
     const scrollY = Math.max(0, evt.scrollY);
+    this.lastScrollY = scrollY;
+    this.scheduleIdlePrune();
+    this.processViewportAt(scrollY);
+  },
 
-    if (!this.isBusy && this.lastKnownScrollHeight > 0 && (scrollY + 520 + 380) >= this.lastKnownScrollHeight) {
-      this.triggerNextChunkLoad();
-      return;
-    }
-
-    if (this.isBusy) return;
+  processViewportAt(scrollY) {
+    if (this.isBusy || this.segments.length === 0) return;
 
     let accHeight = this.paddingY;
     let visibleChar = this.lastActiveCharOffset;
     let foundIdx = this.currentActiveIndex;
+    const screenMid = scrollY + 200;
 
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const segH = this.measuredHeights[seg.id] || seg.height || 300;
+      const segH = this.measuredHeights[seg.id] || 280;
       const segBottom = accHeight + segH;
 
-      if (scrollY >= accHeight && scrollY <= segBottom) {
+      if (screenMid >= accHeight && screenMid <= segBottom) {
         foundIdx = i;
         const ratio = segH > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / segH)) : 0;
         visibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
@@ -531,11 +576,18 @@ export default {
 
     this.currentActiveIndex = foundIdx;
 
-    for (let j = Math.max(0, foundIdx - 1); j <= Math.min(this.segments.length - 1, foundIdx + 1); j++) {
-      if (this.segments[j].unloaded) {
-        this.reloadUnloadedSegment(j);
-        break;
+    const priorityOrder = [foundIdx, foundIdx + 1, foundIdx - 1, foundIdx + 2, foundIdx - 2];
+    for (let k = 0; k < priorityOrder.length; k++) {
+      const candidateIdx = priorityOrder[k];
+      if (candidateIdx >= 0 && candidateIdx < this.segments.length && this.segments[candidateIdx].unloaded) {
+        this.reloadUnloadedSegment(candidateIdx);
+        return;
       }
+    }
+
+    if (this.lastKnownScrollHeight > 0 && (scrollY + 520 + 420) >= this.lastKnownScrollHeight) {
+      this.triggerNextChunkLoad();
+      return;
     }
 
     if (visibleChar >= 0) {
@@ -614,11 +666,6 @@ export default {
 .segment-wrapper {
   width: 196px;
   flex-direction: column;
-  flex-shrink: 0;
-}
-
-.placeholder-box {
-  width: 196px;
   flex-shrink: 0;
 }
 
