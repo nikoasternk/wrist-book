@@ -42,7 +42,7 @@ import file from '@system.file'
 import storage from '@system.storage'
 import brightness from '@system.brightness'
 import router from '@system.router'
-import { getStrings } from '../../services/Localization'
+import { getStrings, applySafeBrightness } from '../../services/Localization'
 
 const BOOKS_DIRECTORY = 'internal://files/books/';
 
@@ -54,6 +54,13 @@ export default {
     confirmDeleteName: ''
   },
 
+  onInit() {
+    brightness.setMode({ mode: 0 });
+    brightness.setValue({ value: 210 });
+    storage.delete({ key: 'WRISTBOOK_CONFIG' });
+    storage.delete({ key: 'READER_CONFIG' });
+  },
+
   onShow() {
     this.confirmDeleteName = '';
     this.loadConfiguration();
@@ -62,24 +69,26 @@ export default {
 
   loadConfiguration() {
     storage.get({
-      key: 'WRISTBOOK_CONFIG',
+      key: 'WRISTBOOK_CONFIG_V3',
       success: (data) => {
         let stayAwake = true;
         let lang = 'auto';
+        let pct = 100;
         if (data) {
           const cfg = JSON.parse(data);
           stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           lang = cfg.language || 'auto';
-          if (cfg.brightnessPct) {
-            const hwVal = Math.max(10, Math.min(255, Math.round(cfg.brightnessPct * 2.55)));
-            brightness.setMode({ mode: 0 });
-            brightness.setValue({ value: hwVal });
-          }
+          pct = cfg.brightnessPct || 100;
         }
+        const br = applySafeBrightness(pct);
+        brightness.setMode({ mode: 0 });
+        brightness.setValue({ value: br.hwValue });
         this.strings = getStrings(lang);
         brightness.setKeepScreenOn({ keepScreenOn: stayAwake });
       },
       fail: () => {
+        brightness.setMode({ mode: 0 });
+        brightness.setValue({ value: 220 });
         this.strings = getStrings('auto');
         brightness.setKeepScreenOn({ keepScreenOn: true });
       }
