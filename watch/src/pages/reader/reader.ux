@@ -200,7 +200,6 @@ export default {
     }
   },
 
-  // Чтение вперёд с сохранением точного consumedLen (чтобы '\n' не переезжал в начало следующего чанка)
   readCleanSlice(startChar, maxLen, callback) {
     if (startChar >= this.totalChars || maxLen <= 0) {
       callback(null, 0);
@@ -239,7 +238,6 @@ export default {
     });
   },
 
-  // Чтение назад с выравниванием начала по пробелу или переносу строки
   readCleanSliceBackward(endChar, maxLen, callback) {
     if (endChar <= 0 || maxLen <= 0) {
       callback(null, 0, 0);
@@ -424,7 +422,6 @@ export default {
       }
     }
 
-    // Если снизу есть ранее схлопнутый сегмент — восстанавливаем его мгновенно
     if (this.collapsedBottomSegments.length > 0) {
       this.restoreCollapsedBottomSegment();
       return;
@@ -446,7 +443,6 @@ export default {
       const estH = this.estimateSegmentHeight(actualLen);
       this.measuredHeights[newId] = estH;
 
-      // Оставляем boxHeight: 'auto', чтобы не вызывать повторный рендер и скачок текста!
       this.segments.push({
         id: newId,
         startChar: nextStart,
@@ -457,11 +453,9 @@ export default {
       });
 
       this.recalculateTotalKnownHeight();
-      // Снимаем блокировку сразу после вставки текста (занимает ~3 мс вместо 60 мс!)
       this.unlockBusyAndContinue();
       this.scheduleIdlePrune();
 
-      // Фоновое точное измерение высоты без блокировки скролла и без изменения boxHeight
       setTimeout(() => {
         this.measureSegmentDomHeight(newId, estH, () => {
           this.recalculateTotalKnownHeight();
@@ -484,7 +478,6 @@ export default {
       }
     }
 
-    // Если сверху есть схлопнутый в спейсер сегмент — возвращаем его без скачка скролла!
     if (this.collapsedTopSegments.length > 0) {
       this.restoreCollapsedTopSegment();
       return;
@@ -544,7 +537,6 @@ export default {
         if (str.length > 0 && str[str.length - 1] === '\n') {
           str = str.substring(0, str.length - 1);
         }
-        // Одновременно уменьшаем верхний спейсер и возвращаем сегмент той же высоты — 0px сдвига!
         this.topSpacerExtra = Math.max(0, this.topSpacerExtra - meta.height);
         this.syncEdgePads();
         this.measuredHeights[meta.id] = meta.height;
@@ -621,7 +613,6 @@ export default {
     const allowedRadius = Math.max(3, Math.floor(maxActiveCount / 2));
     const center = this.currentActiveIndex;
 
-    // 1. Выгружаем текст у далёких сегментов, предварительно точно измерив их высоту
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
       if (!seg.unloaded && Math.abs(i - center) > allowedRadius) {
@@ -636,8 +627,6 @@ export default {
       }
     }
 
-    // 2. Защита DOM от раздувания: если сверху или снизу скопилось > 10 пустых коробок,
-    // схлопываем крайние в topPadHeight / bottomPadHeight (DOM остаётся чистым!)
     while (this.segments.length > 16 && this.currentActiveIndex > 8 && this.segments[0].unloaded) {
       const removed = this.segments.shift();
       const h = this.measuredHeights[removed.id] || this.estimateSegmentHeight(removed.charLen);
@@ -708,7 +697,6 @@ export default {
   processViewportAt(scrollY) {
     if (this.segments.length === 0) return;
     if (this.isBusy) {
-      // Запоминаем, что скролл сдвинулся, чтобы мгновенно обработать позицию после разблокировки
       this.pendingViewportCheck = true;
       return;
     }
@@ -737,7 +725,6 @@ export default {
 
     this.currentActiveIndex = foundIdx;
 
-    // Проверяем соседей в радиусе 2 сегментов
     const priorityOrder = [foundIdx, foundIdx + 1, foundIdx - 1, foundIdx + 2, foundIdx - 2];
     for (let k = 0; k < priorityOrder.length; k++) {
       const candidateIdx = priorityOrder[k];
@@ -747,13 +734,11 @@ export default {
       }
     }
 
-    // Если приблизились к верхнему спейсеру со схлопнутыми сегментами — заранее распаковываем
     if (this.collapsedTopSegments.length > 0 && scrollY <= this.topPadHeight + 450) {
       this.restoreCollapsedTopSegment();
       return;
     }
 
-    // Заблаговременная подгрузка снизу за 900px до конца (почти 2 экрана запаса)
     if (this.lastKnownScrollHeight > 0 && (scrollY + 520 + 900) >= this.lastKnownScrollHeight) {
       this.triggerNextChunkLoad();
       return;
