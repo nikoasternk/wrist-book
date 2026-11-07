@@ -1,8 +1,8 @@
 {
   "package": "com.band.wristbook",
   "name": "Wrist Book",
-  "versionName": "1.0.2",
-  "versionCode": 102,
+  "versionName": "1.0.4",
+  "versionCode": 104,
   "minPlatformVersion": 1100,
   "icon": "/common/logo.png",
   "deviceTypeList": [
@@ -11,11 +11,9 @@
   "features": [
     { "name": "system.router" },
     { "name": "system.storage" },
-    { "name": "system.prompt" },
     { "name": "system.file" },
     { "name": "system.interconnect" },
     { "name": "system.brightness" },
-    { "name": "system.battery" },
     { "name": "system.configuration" },
     { "name": "system.device" }
   ],
@@ -26,20 +24,10 @@
   "router": {
     "entry": "pages/shelf",
     "pages": {
-      "pages/shelf": {
-        "component": "shelf",
-        "launchMode": "singleTask"
-      },
-      "pages/reader": {
-        "component": "reader"
-      },
-      "pages/settings": {
-        "component": "settings"
-      },
-      "pages/transfer": {
-        "component": "transfer",
-        "launchMode": "singleTask"
-      }
+      "pages/shelf": { "component": "shelf", "launchMode": "singleTask" },
+      "pages/reader": { "component": "reader" },
+      "pages/settings": { "component": "settings" },
+      "pages/transfer": { "component": "transfer", "launchMode": "singleTask" }
     }
   },
   "display": {
