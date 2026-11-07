@@ -1,8 +1,8 @@
 {
   "package": "com.band.wristbook",
   "name": "Wrist Book",
-  "versionName": "1.0.0",
-  "versionCode": 100,
+  "versionName": "1.0.2",
+  "versionCode": 102,
   "minPlatformVersion": 1100,
   "icon": "/common/logo.png",
   "deviceTypeList": [
@@ -16,7 +16,8 @@
     { "name": "system.interconnect" },
     { "name": "system.brightness" },
     { "name": "system.battery" },
-    { "name": "system.configuration" }
+    { "name": "system.configuration" },
+    { "name": "system.device" }
   ],
   "config": {
     "logLevel": "log",
