@@ -8,7 +8,7 @@
       @scrolltop="onScrollReachTop"
       @scrollbottom="onScrollReachBottom">
 
-      <div class="edge-pad" style="height: {{paddingY}}px;"></div>
+      <div class="edge-pad" style="height: {{topPadHeight}}px;"></div>
 
       <div
         for="{{segments}}"
@@ -21,7 +21,7 @@
           style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
       </div>
 
-      <div class="edge-pad" style="height: {{paddingY}}px;"></div>
+      <div class="edge-pad" style="height: {{bottomPadHeight}}px;"></div>
     </scroll>
 
     <div class="top-mask" style="height: {{paddingY}}px;">
@@ -48,14 +48,17 @@ export default {
     fontSize: 28,
     lineHeight: 38,
     paddingY: 36,
-    windowChars: 2000,
-    chunkSize: 350,
+    topPadHeight: 36,
+    bottomPadHeight: 36,
+    windowChars: 2400,
+    chunkSize: 600,
     totalChars: 0,
     bookUri: '',
     bookName: '',
     segments: [],
     nextUniqueId: 1,
     isBusy: false,
+    pendingViewportCheck: false,
     lastKnownScrollHeight: 0,
     lastScrollY: 0,
     currentActiveIndex: 0,
@@ -75,6 +78,10 @@ export default {
     this.bookUri = this.uri;
     this.bookName = this.name;
     this.measuredHeights = {};
+    this.collapsedTopSegments = [];
+    this.collapsedBottomSegments = [];
+    this.topSpacerExtra = 0;
+    this.bottomSpacerExtra = 0;
     this.updateClock();
     this.clockTimer = setInterval(() => {
       this.updateClock();
@@ -98,6 +105,11 @@ export default {
     brightness.setKeepScreenOn({ keepScreenOn: false });
   },
 
+  syncEdgePads() {
+    this.topPadHeight = this.paddingY + this.topSpacerExtra;
+    this.bottomPadHeight = this.paddingY + this.bottomSpacerExtra;
+  },
+
   loadSettingsAndStart() {
     storage.get({
       key: 'WRISTBOOK_CONFIG',
@@ -107,14 +119,15 @@ export default {
           const cfg = JSON.parse(data);
           this.fontSize = Math.max(8, Math.min(48, cfg.fontSize || 28));
           this.lineHeight = Math.max(10, Math.floor(this.fontSize * 1.35));
-          this.windowChars = Math.max(1000, cfg.windowChars || 2000);
-          this.chunkSize = 350;
+          this.windowChars = Math.max(1200, cfg.windowChars || 2400);
+          this.chunkSize = 600;
           this.paddingY = Math.max(16, Math.min(120, cfg.paddingY !== undefined ? cfg.paddingY : 36));
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.customBrightness = cfg.customBrightness === true;
           this.brightnessPct = cfg.brightnessPct !== undefined ? cfg.brightnessPct : 80;
           lang = cfg.language || 'auto';
         }
+        this.syncEdgePads();
         this.strings = getStrings(lang);
         if (this.customBrightness) {
           brightness.setMode({ mode: 0 });
@@ -127,6 +140,7 @@ export default {
         }
       },
       fail: () => {
+        this.syncEdgePads();
         this.strings = getStrings('auto');
         brightness.setKeepScreenOn({ keepScreenOn: true });
         if (this.segments.length === 0) {
@@ -186,6 +200,7 @@ export default {
     }
   },
 
+  // Чтение вперёд с сохранением точного consumedLen (чтобы '\n' не переезжал в начало следующего чанка)
   readCleanSlice(startChar, maxLen, callback) {
     if (startChar >= this.totalChars || maxLen <= 0) {
       callback(null, 0);
@@ -200,9 +215,9 @@ export default {
       length: readLen * 2,
       success: (res) => {
         let str = this.decodeBufferFast(res.buffer);
-        if (!isEnd && str.length > 35) {
+        if (!isEnd && str.length > 45) {
           let cut = -1;
-          for (let j = str.length - 1; j >= str.length - 30; j--) {
+          for (let j = str.length - 1; j >= str.length - 40; j--) {
             if (str[j] === ' ' || str[j] === '\n') {
               cut = j + 1;
               break;
@@ -212,10 +227,11 @@ export default {
             str = str.substring(0, cut);
           }
         }
+        const consumedLen = str.length;
         if (!isEnd && str.length > 0 && str[str.length - 1] === '\n') {
           str = str.substring(0, str.length - 1);
         }
-        callback(str, str.length);
+        callback(str, consumedLen);
       },
       fail: () => {
         callback(null, 0);
@@ -223,48 +239,94 @@ export default {
     });
   },
 
-  measureSegmentDomHeight(segId, fallbackDelta, callback) {
-    const el = this.$element('seg_' + segId);
-    if (el && el.getBoundingClientRect) {
-      el.getBoundingClientRect({
-        success: (rect) => {
-          if (rect && rect.height > 10) {
-            callback(rect.height);
-          } else {
-            callback(fallbackDelta);
-          }
-        },
-        fail: () => {
-          callback(fallbackDelta);
-        }
-      });
-    } else {
-      callback(fallbackDelta);
-    }
-  },
-
-  getScrollHeight(callback) {
-    const scroller = this.$element('scrollViewport');
-    if (!scroller || !scroller.getScrollRect) {
-      callback(0);
+  // Чтение назад с выравниванием начала по пробелу или переносу строки
+  readCleanSliceBackward(endChar, maxLen, callback) {
+    if (endChar <= 0 || maxLen <= 0) {
+      callback(null, 0, 0);
       return;
     }
-    scroller.getScrollRect({
-      success: (rect) => {
-        callback((rect && rect.height) ? rect.height : 0);
+    const rawStart = Math.max(0, endChar - maxLen);
+    const rawLen = endChar - rawStart;
+
+    file.readArrayBuffer({
+      uri: this.bookUri,
+      position: rawStart * 2,
+      length: rawLen * 2,
+      success: (res) => {
+        let str = this.decodeBufferFast(res.buffer);
+        let shift = 0;
+        if (rawStart > 0 && str.length > 45) {
+          for (let j = 0; j < 40; j++) {
+            if (str[j] === ' ' || str[j] === '\n') {
+              shift = j + 1;
+              break;
+            }
+          }
+          if (shift > 0) {
+            str = str.substring(shift);
+          }
+        }
+        const actualStart = rawStart + shift;
+        const consumedLen = endChar - actualStart;
+        if (str.length > 0 && str[str.length - 1] === '\n') {
+          str = str.substring(0, str.length - 1);
+        }
+        callback(str, actualStart, consumedLen);
       },
       fail: () => {
-        callback(0);
+        callback(null, 0, 0);
       }
     });
   },
 
+  estimateSegmentHeight(charLen) {
+    const charsPerLine = Math.max(8, Math.floor(196 / (this.fontSize * 0.58)));
+    const lines = Math.max(1, Math.ceil(charLen / charsPerLine));
+    return lines * this.lineHeight;
+  },
+
+  measureSegmentDomHeight(segId, fallbackH, callback) {
+    const el = this.$element('seg_' + segId);
+    if (el && el.getBoundingClientRect) {
+      el.getBoundingClientRect({
+        success: (rect) => {
+          if (rect && rect.height > 8) {
+            this.measuredHeights[segId] = rect.height;
+            callback(rect.height);
+          } else {
+            const h = this.measuredHeights[segId] || fallbackH;
+            this.measuredHeights[segId] = h;
+            callback(h);
+          }
+        },
+        fail: () => {
+          const h = this.measuredHeights[segId] || fallbackH;
+          this.measuredHeights[segId] = h;
+          callback(h);
+        }
+      });
+    } else {
+      const h = this.measuredHeights[segId] || fallbackH;
+      this.measuredHeights[segId] = h;
+      callback(h);
+    }
+  },
+
   recalculateTotalKnownHeight() {
-    let sum = this.paddingY * 2;
+    let sum = this.topPadHeight + this.bottomPadHeight;
     for (let i = 0; i < this.segments.length; i++) {
-      sum += (this.measuredHeights[this.segments[i].id] || 280);
+      const seg = this.segments[i];
+      sum += (this.measuredHeights[seg.id] || this.estimateSegmentHeight(seg.charLen));
     }
     this.lastKnownScrollHeight = sum;
+  },
+
+  unlockBusyAndContinue() {
+    this.isBusy = false;
+    if (this.pendingViewportCheck) {
+      this.pendingViewportCheck = false;
+      this.processViewportAt(this.lastScrollY);
+    }
   },
 
   startReadingSession(savedOffset) {
@@ -286,71 +348,52 @@ export default {
     this.updateProgressMetric(clampedOffset);
 
     if (clampedOffset > 0) {
-      const prevStart = Math.max(0, clampedOffset - this.chunkSize);
-      const prevDesired = clampedOffset - prevStart;
+      this.readCleanSliceBackward(clampedOffset, this.chunkSize, (prevText, prevStart, prevLen) => {
+        const id1 = this.nextUniqueId++;
+        this.measuredHeights[id1] = this.estimateSegmentHeight(prevLen);
 
-      file.readArrayBuffer({
-        uri: this.bookUri,
-        position: prevStart * 2,
-        length: prevDesired * 2,
-        success: (res1) => {
-          const prevText = this.decodeBufferFast(res1.buffer);
-          const id1 = this.nextUniqueId++;
-          this.segments = [{
-            id: id1,
-            startChar: prevStart,
-            charLen: prevDesired,
-            text: prevText,
-            boxHeight: 'auto',
-            unloaded: false
-          }];
+        this.readCleanSlice(clampedOffset, this.chunkSize * 2, (currText, currLen) => {
+          const id2 = this.nextUniqueId++;
+          this.measuredHeights[id2] = this.estimateSegmentHeight(currLen);
+
+          this.segments = [
+            {
+              id: id1,
+              startChar: prevStart,
+              charLen: prevLen,
+              text: prevText || '',
+              boxHeight: 'auto',
+              unloaded: false
+            },
+            {
+              id: id2,
+              startChar: clampedOffset,
+              charLen: currLen,
+              text: currText || '',
+              boxHeight: 'auto',
+              unloaded: false
+            }
+          ];
+          this.currentActiveIndex = 1;
 
           setTimeout(() => {
-            this.getScrollHeight((h1) => {
-              const fallbackH1 = Math.max(40, h1 - (this.paddingY * 2));
-              this.measureSegmentDomHeight(id1, fallbackH1, (seg1RealHeight) => {
-                this.measuredHeights[id1] = seg1RealHeight;
-                this.segments[0].boxHeight = seg1RealHeight + 'px';
-
-                this.readCleanSlice(clampedOffset, this.chunkSize * 2, (currText, currLen) => {
-                  const id2 = this.nextUniqueId++;
-                  this.segments.push({
-                    id: id2,
-                    startChar: clampedOffset,
-                    charLen: currLen,
-                    text: currText || '',
-                    boxHeight: 'auto',
-                    unloaded: false
-                  });
-                  this.currentActiveIndex = 1;
-
-                  setTimeout(() => {
-                    this.getScrollHeight((h2) => {
-                      const fallbackH2 = Math.max(40, h2 - h1);
-                      this.measureSegmentDomHeight(id2, fallbackH2, (seg2RealHeight) => {
-                        this.measuredHeights[id2] = seg2RealHeight;
-                        this.segments[1].boxHeight = seg2RealHeight + 'px';
-                        this.recalculateTotalKnownHeight();
-                        this.lastScrollY = seg1RealHeight;
-                        try {
-                          this.$element('scrollViewport').scrollTo({ top: seg1RealHeight, behavior: 'instant' });
-                        } catch (e) {}
-                        this.isBusy = false;
-                      });
-                    });
-                  }, 30);
-                });
+            this.measureSegmentDomHeight(id1, this.measuredHeights[id1], (seg1RealH) => {
+              this.measureSegmentDomHeight(id2, this.measuredHeights[id2], () => {
+                this.recalculateTotalKnownHeight();
+                this.lastScrollY = seg1RealH;
+                try {
+                  this.$element('scrollViewport').scrollTo({ top: seg1RealH, behavior: 'instant' });
+                } catch (e) {}
+                this.unlockBusyAndContinue();
               });
             });
-          }, 30);
-        },
-        fail: () => {
-          this.isBusy = false;
-        }
+          }, 20);
+        });
       });
     } else {
       this.readCleanSlice(0, this.chunkSize * 2, (firstText, firstLen) => {
         const id1 = this.nextUniqueId++;
+        this.measuredHeights[id1] = this.estimateSegmentHeight(firstLen);
         this.segments = [{
           id: id1,
           startChar: 0,
@@ -362,16 +405,11 @@ export default {
         this.currentActiveIndex = 0;
 
         setTimeout(() => {
-          this.getScrollHeight((h1) => {
-            const fallbackH1 = Math.max(40, h1 - (this.paddingY * 2));
-            this.measureSegmentDomHeight(id1, fallbackH1, (seg1RealHeight) => {
-              this.measuredHeights[id1] = seg1RealHeight;
-              this.segments[0].boxHeight = seg1RealHeight + 'px';
-              this.recalculateTotalKnownHeight();
-              this.isBusy = false;
-            });
+          this.measureSegmentDomHeight(id1, this.measuredHeights[id1], () => {
+            this.recalculateTotalKnownHeight();
+            this.unlockBusyAndContinue();
           });
-        }, 30);
+        }, 20);
       });
     }
   },
@@ -386,20 +424,29 @@ export default {
       }
     }
 
+    // Если снизу есть ранее схлопнутый сегмент — восстанавливаем его мгновенно
+    if (this.collapsedBottomSegments.length > 0) {
+      this.restoreCollapsedBottomSegment();
+      return;
+    }
+
     const lastSeg = this.segments[this.segments.length - 1];
     const nextStart = lastSeg.startChar + lastSeg.charLen;
     if (nextStart >= this.totalChars) return;
 
     this.isBusy = true;
-    const heightBefore = this.lastKnownScrollHeight;
 
     this.readCleanSlice(nextStart, this.chunkSize, (str, actualLen) => {
-      if (!str || actualLen <= 0) {
-        this.isBusy = false;
+      if (str === null || actualLen <= 0) {
+        this.unlockBusyAndContinue();
         return;
       }
 
       const newId = this.nextUniqueId++;
+      const estH = this.estimateSegmentHeight(actualLen);
+      this.measuredHeights[newId] = estH;
+
+      // Оставляем boxHeight: 'auto', чтобы не вызывать повторный рендер и скачок текста!
       this.segments.push({
         id: newId,
         startChar: nextStart,
@@ -408,23 +455,18 @@ export default {
         boxHeight: 'auto',
         unloaded: false
       });
-      const pushedIdx = this.segments.length - 1;
 
+      this.recalculateTotalKnownHeight();
+      // Снимаем блокировку сразу после вставки текста (занимает ~3 мс вместо 60 мс!)
+      this.unlockBusyAndContinue();
+      this.scheduleIdlePrune();
+
+      // Фоновое точное измерение высоты без блокировки скролла и без изменения boxHeight
       setTimeout(() => {
-        this.getScrollHeight((heightAfter) => {
-          const fallbackDelta = (heightAfter > heightBefore && heightBefore > 0) ? (heightAfter - heightBefore) : 260;
-          this.measureSegmentDomHeight(newId, fallbackDelta, (exactH) => {
-            this.measuredHeights[newId] = exactH;
-            if (this.segments[pushedIdx] && this.segments[pushedIdx].id === newId) {
-              this.segments[pushedIdx].boxHeight = exactH + 'px';
-            }
-            this.recalculateTotalKnownHeight();
-            this.isBusy = false;
-            this.scheduleIdlePrune();
-            this.processViewportAt(this.lastScrollY);
-          });
+        this.measureSegmentDomHeight(newId, estH, () => {
+          this.recalculateTotalKnownHeight();
         });
-      }, 25);
+      }, 20);
     });
   },
 
@@ -442,52 +484,122 @@ export default {
       }
     }
 
+    // Если сверху есть схлопнутый в спейсер сегмент — возвращаем его без скачка скролла!
+    if (this.collapsedTopSegments.length > 0) {
+      this.restoreCollapsedTopSegment();
+      return;
+    }
+
     const firstSeg = this.segments[0];
     if (firstSeg.startChar <= 0) return;
 
     this.isBusy = true;
-    const prevStart = Math.max(0, firstSeg.startChar - this.chunkSize);
-    const charsToRead = firstSeg.startChar - prevStart;
-    const heightBefore = this.lastKnownScrollHeight;
+
+    this.readCleanSliceBackward(firstSeg.startChar, this.chunkSize, (str, prevStart, charsToRead) => {
+      if (str === null || charsToRead <= 0) {
+        this.unlockBusyAndContinue();
+        return;
+      }
+
+      const newId = this.nextUniqueId++;
+      const estH = this.estimateSegmentHeight(charsToRead);
+      this.measuredHeights[newId] = estH;
+
+      this.segments.unshift({
+        id: newId,
+        startChar: prevStart,
+        charLen: charsToRead,
+        text: str,
+        boxHeight: 'auto',
+        unloaded: false
+      });
+      this.currentActiveIndex++;
+
+      setTimeout(() => {
+        this.measureSegmentDomHeight(newId, estH, (addedHeight) => {
+          this.recalculateTotalKnownHeight();
+          const targetY = this.lastScrollY + addedHeight;
+          this.lastScrollY = targetY;
+          try {
+            this.$element('scrollViewport').scrollTo({ top: targetY, behavior: 'instant' });
+          } catch (e) {}
+          this.unlockBusyAndContinue();
+          this.scheduleIdlePrune();
+        });
+      }, 16);
+    });
+  },
+
+  restoreCollapsedTopSegment() {
+    const meta = this.collapsedTopSegments.pop();
+    if (!meta) return;
+    this.isBusy = true;
 
     file.readArrayBuffer({
       uri: this.bookUri,
-      position: prevStart * 2,
-      length: charsToRead * 2,
+      position: meta.startChar * 2,
+      length: meta.charLen * 2,
       success: (res) => {
-        const str = this.decodeBufferFast(res.buffer);
-        const newId = this.nextUniqueId++;
+        let str = this.decodeBufferFast(res.buffer);
+        if (str.length > 0 && str[str.length - 1] === '\n') {
+          str = str.substring(0, str.length - 1);
+        }
+        // Одновременно уменьшаем верхний спейсер и возвращаем сегмент той же высоты — 0px сдвига!
+        this.topSpacerExtra = Math.max(0, this.topSpacerExtra - meta.height);
+        this.syncEdgePads();
+        this.measuredHeights[meta.id] = meta.height;
         this.segments.unshift({
-          id: newId,
-          startChar: prevStart,
-          charLen: charsToRead,
+          id: meta.id,
+          startChar: meta.startChar,
+          charLen: meta.charLen,
           text: str,
           boxHeight: 'auto',
           unloaded: false
         });
         this.currentActiveIndex = 0;
-
-        setTimeout(() => {
-          this.getScrollHeight((heightAfter) => {
-            const fallbackAdded = Math.max(40, heightAfter - heightBefore);
-            this.measureSegmentDomHeight(newId, fallbackAdded, (addedHeight) => {
-              this.measuredHeights[newId] = addedHeight;
-              if (this.segments[0] && this.segments[0].id === newId) {
-                this.segments[0].boxHeight = addedHeight + 'px';
-              }
-              this.recalculateTotalKnownHeight();
-              this.lastScrollY = addedHeight;
-              try {
-                this.$element('scrollViewport').scrollTo({ top: addedHeight, behavior: 'instant' });
-              } catch (e) {}
-              this.isBusy = false;
-              this.scheduleIdlePrune();
-            });
-          });
-        }, 25);
+        this.recalculateTotalKnownHeight();
+        this.unlockBusyAndContinue();
+        this.scheduleIdlePrune();
       },
       fail: () => {
-        this.isBusy = false;
+        this.collapsedTopSegments.push(meta);
+        this.unlockBusyAndContinue();
+      }
+    });
+  },
+
+  restoreCollapsedBottomSegment() {
+    const meta = this.collapsedBottomSegments.pop();
+    if (!meta) return;
+    this.isBusy = true;
+
+    file.readArrayBuffer({
+      uri: this.bookUri,
+      position: meta.startChar * 2,
+      length: meta.charLen * 2,
+      success: (res) => {
+        let str = this.decodeBufferFast(res.buffer);
+        if (str.length > 0 && str[str.length - 1] === '\n') {
+          str = str.substring(0, str.length - 1);
+        }
+        this.bottomSpacerExtra = Math.max(0, this.bottomSpacerExtra - meta.height);
+        this.syncEdgePads();
+        this.measuredHeights[meta.id] = meta.height;
+        this.segments.push({
+          id: meta.id,
+          startChar: meta.startChar,
+          charLen: meta.charLen,
+          text: str,
+          boxHeight: 'auto',
+          unloaded: false
+        });
+        this.recalculateTotalKnownHeight();
+        this.unlockBusyAndContinue();
+        this.scheduleIdlePrune();
+      },
+      fail: () => {
+        this.collapsedBottomSegments.push(meta);
+        this.unlockBusyAndContinue();
       }
     });
   },
@@ -501,21 +613,60 @@ export default {
       if (!this.isBusy) {
         this.pruneDistantSegments();
       }
-    }, 260);
+    }, 300);
   },
 
   pruneDistantSegments() {
-    const maxActiveCount = Math.max(5, Math.ceil(this.windowChars / this.chunkSize) + 1);
-    const allowedRadius = Math.max(2, Math.floor(maxActiveCount / 2));
+    const maxActiveCount = Math.max(6, Math.ceil(this.windowChars / this.chunkSize) + 2);
+    const allowedRadius = Math.max(3, Math.floor(maxActiveCount / 2));
     const center = this.currentActiveIndex;
 
+    // 1. Выгружаем текст у далёких сегментов, предварительно точно измерив их высоту
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      if (!seg.unloaded && Math.abs(i - center) > allowedRadius && this.measuredHeights[seg.id]) {
-        seg.boxHeight = this.measuredHeights[seg.id] + 'px';
-        seg.text = '';
-        seg.unloaded = true;
+      if (!seg.unloaded && Math.abs(i - center) > allowedRadius) {
+        const fallbackH = this.measuredHeights[seg.id] || this.estimateSegmentHeight(seg.charLen);
+        this.measureSegmentDomHeight(seg.id, fallbackH, (exactH) => {
+          if (Math.abs(i - this.currentActiveIndex) > allowedRadius && !seg.unloaded) {
+            seg.boxHeight = exactH + 'px';
+            seg.text = '';
+            seg.unloaded = true;
+          }
+        });
       }
+    }
+
+    // 2. Защита DOM от раздувания: если сверху или снизу скопилось > 10 пустых коробок,
+    // схлопываем крайние в topPadHeight / bottomPadHeight (DOM остаётся чистым!)
+    while (this.segments.length > 16 && this.currentActiveIndex > 8 && this.segments[0].unloaded) {
+      const removed = this.segments.shift();
+      const h = this.measuredHeights[removed.id] || this.estimateSegmentHeight(removed.charLen);
+      this.collapsedTopSegments.push({
+        id: removed.id,
+        startChar: removed.startChar,
+        charLen: removed.charLen,
+        height: h
+      });
+      this.topSpacerExtra += h;
+      this.currentActiveIndex--;
+      this.syncEdgePads();
+    }
+
+    while (
+      this.segments.length > 16 &&
+      this.segments.length - 1 - this.currentActiveIndex > 8 &&
+      this.segments[this.segments.length - 1].unloaded
+    ) {
+      const removed = this.segments.pop();
+      const h = this.measuredHeights[removed.id] || this.estimateSegmentHeight(removed.charLen);
+      this.collapsedBottomSegments.push({
+        id: removed.id,
+        startChar: removed.startChar,
+        charLen: removed.charLen,
+        height: h
+      });
+      this.bottomSpacerExtra += h;
+      this.syncEdgePads();
     }
   },
 
@@ -530,16 +681,18 @@ export default {
       position: seg.startChar * 2,
       length: seg.charLen * 2,
       success: (res) => {
-        const str = this.decodeBufferFast(res.buffer);
+        let str = this.decodeBufferFast(res.buffer);
+        if (str.length > 0 && str[str.length - 1] === '\n') {
+          str = str.substring(0, str.length - 1);
+        }
         seg.text = str;
+        seg.boxHeight = 'auto';
         seg.unloaded = false;
-        this.currentActiveIndex = index;
-        this.isBusy = false;
+        this.unlockBusyAndContinue();
         this.scheduleIdlePrune();
-        this.processViewportAt(this.lastScrollY);
       },
       fail: () => {
-        this.isBusy = false;
+        this.unlockBusyAndContinue();
       }
     });
   },
@@ -553,16 +706,21 @@ export default {
   },
 
   processViewportAt(scrollY) {
-    if (this.isBusy || this.segments.length === 0) return;
+    if (this.segments.length === 0) return;
+    if (this.isBusy) {
+      // Запоминаем, что скролл сдвинулся, чтобы мгновенно обработать позицию после разблокировки
+      this.pendingViewportCheck = true;
+      return;
+    }
 
-    let accHeight = this.paddingY;
+    let accHeight = this.topPadHeight;
     let visibleChar = this.lastActiveCharOffset;
     let foundIdx = this.currentActiveIndex;
-    const screenMid = scrollY + 200;
+    const screenMid = scrollY + 220;
 
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const segH = this.measuredHeights[seg.id] || 280;
+      const segH = this.measuredHeights[seg.id] || this.estimateSegmentHeight(seg.charLen);
       const segBottom = accHeight + segH;
 
       if (screenMid >= accHeight && screenMid <= segBottom) {
@@ -570,12 +728,16 @@ export default {
         const ratio = segH > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / segH)) : 0;
         visibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
         break;
+      } else if (screenMid > segBottom && i === this.segments.length - 1) {
+        foundIdx = i;
+        visibleChar = seg.startChar + seg.charLen;
       }
       accHeight = segBottom;
     }
 
     this.currentActiveIndex = foundIdx;
 
+    // Проверяем соседей в радиусе 2 сегментов
     const priorityOrder = [foundIdx, foundIdx + 1, foundIdx - 1, foundIdx + 2, foundIdx - 2];
     for (let k = 0; k < priorityOrder.length; k++) {
       const candidateIdx = priorityOrder[k];
@@ -585,7 +747,14 @@ export default {
       }
     }
 
-    if (this.lastKnownScrollHeight > 0 && (scrollY + 520 + 420) >= this.lastKnownScrollHeight) {
+    // Если приблизились к верхнему спейсеру со схлопнутыми сегментами — заранее распаковываем
+    if (this.collapsedTopSegments.length > 0 && scrollY <= this.topPadHeight + 450) {
+      this.restoreCollapsedTopSegment();
+      return;
+    }
+
+    // Заблаговременная подгрузка снизу за 900px до конца (почти 2 экрана запаса)
+    if (this.lastKnownScrollHeight > 0 && (scrollY + 520 + 900) >= this.lastKnownScrollHeight) {
       this.triggerNextChunkLoad();
       return;
     }
@@ -643,65 +812,3 @@ export default {
   }
 }
 </script>
-
-<style>
-.reader-page {
-  width: 212px;
-  height: 520px;
-  background-color: #000000;
-}
-
-.scroll-area {
-  width: 212px;
-  height: 520px;
-  flex-direction: column;
-  align-items: center;
-}
-
-.edge-pad {
-  width: 196px;
-  flex-shrink: 0;
-}
-
-.segment-wrapper {
-  width: 196px;
-  flex-direction: column;
-  flex-shrink: 0;
-}
-
-.book-text {
-  width: 196px;
-  color: #FFFFFF;
-  flex-shrink: 0;
-  font-weight: bold;
-  text-align: left;
-  lines: -1;
-}
-
-.top-mask {
-  position: absolute;
-  top: 0px;
-  left: 0px;
-  width: 212px;
-  background-color: #000000;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: 4px;
-}
-
-.clock-txt {
-  width: 212px;
-  color: #888888;
-  font-size: 20px;
-  font-weight: bold;
-  text-align: center;
-}
-
-.bottom-mask {
-  position: absolute;
-  bottom: 0px;
-  left: 0px;
-  width: 212px;
-  background-color: #000000;
-}
-</style>
