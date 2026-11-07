@@ -33,6 +33,10 @@ const DICTIONARY = {
     storageBooks: 'Books',
     storageSystem: 'System',
     storageFree: 'Free',
+    deleteAllBooks: 'Delete All Books',
+    deleteAllBtn: 'Delete All',
+    deleteAllConfirm: 'Confirm Delete?',
+    deleteAllDone: 'Deleted ✓',
     resetSettings: 'Reset Settings',
     resetConfirm: 'Confirm Reset?',
     syncTitle: 'Syncing',
@@ -74,6 +78,10 @@ const DICTIONARY = {
     storageBooks: 'Книги',
     storageSystem: 'Система',
     storageFree: 'Свободно',
+    deleteAllBooks: 'Удалить все книги',
+    deleteAllBtn: 'Удалить все',
+    deleteAllConfirm: 'Точно удалить?',
+    deleteAllDone: 'Удалено ✓',
     resetSettings: 'Сброс настроек',
     resetConfirm: 'Точно сбросить?',
     syncTitle: 'Синхронизация',
@@ -103,7 +111,31 @@ export function getStrings(preferredMode) {
   return DICTIONARY[code] || DICTIONARY.en;
 }
 
-export function pctToHardwareBrightness(pct) {
-  const clamped = Math.max(1, Math.min(100, pct || 50));
-  return Math.max(1, Math.min(255, Math.round((clamped / 100) * 255)));
+export function pctToHardwareBrightness(visualPct) {
+  const clamped = Math.max(1, Math.min(100, visualPct || 80));
+  const minHw = 28;
+  const maxHw = 255;
+  return Math.round(minHw + ((clamped - 1) / 99) * (maxHw - minHw));
+}
+
+export function fitFontSize(text, maxWidthPx, maxFontPx, minFontPx, singleLine) {
+  if (!text) return maxFontPx;
+  const str = String(text);
+  const words = str.split(' ');
+  let longestWord = 1;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].length > longestWord) {
+      longestWord = words[i].length;
+    }
+  }
+  const byLongestWord = Math.floor(maxWidthPx / (longestWord * 0.64));
+  let size = Math.min(maxFontPx, byLongestWord);
+  if (singleLine) {
+    const byFullLen = Math.floor(maxWidthPx / (Math.max(1, str.length) * 0.60));
+    size = Math.min(size, byFullLen);
+  } else if (str.length > 16) {
+    const byTwoLines = Math.floor((maxWidthPx * 1.85) / (str.length * 0.60));
+    size = Math.min(size, byTwoLines);
+  }
+  return Math.max(minFontPx, size);
 }
