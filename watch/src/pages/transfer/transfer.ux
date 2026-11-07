@@ -71,6 +71,9 @@ export default {
     if (this.statusSub) {
       globalThis.wearableBridge.removeStatusListener(this.statusSub);
     }
+    if (globalThis.bookReceiver) {
+      globalThis.bookReceiver.setTransferListener(null);
+    }
   },
 
   goBack() {
