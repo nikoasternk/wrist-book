@@ -5,7 +5,7 @@ const DICTIONARY = {
     appName: 'Wrist Book',
     settings: 'Settings',
     emptyTitle: 'No Books Yet',
-    emptySubtitle: 'Send text or a TXT file from your phone',
+    emptySubtitle: 'Send text from phone',
     deleteBook: 'Delete',
     confirmDelete: 'Sure?',
     loading: 'Loading...',
@@ -13,23 +13,24 @@ const DICTIONARY = {
     emptyFile: 'Empty File',
     readError: 'Read Error',
     back: '← Back',
+    save: 'Save Settings',
     language: 'Language',
     langAuto: 'Auto',
     langEn: 'English',
     langRu: 'Русский',
     keepScreenOn: 'Keep Screen On',
-    enabled: 'ENABLED',
-    disabled: 'DISABLED',
+    customBrightness: 'Custom Bright',
+    enabled: 'ON',
+    disabled: 'OFF',
     brightness: 'Brightness',
-    sampleText: 'Sample Text',
     fontSize: 'Font Size',
-    bufferSize: 'Buffer (chars)',
-    edgePadding: 'Top/Bottom Padding',
-    storageTitle: 'Storage',
+    bufferSize: 'Buffer Limit',
+    edgePadding: 'Top/Bottom Margin',
+    storageTitle: 'Memory Info',
     storageUsed: 'Used',
     storageBooks: 'Books',
-    storageSystem: 'Config/Cache',
-    storageFree: 'Free',
+    storageSystem: 'System',
+    storageFree: 'Free Space',
     resetSettings: 'Reset Settings',
     resetConfirm: 'Confirm Reset?',
     syncTitle: 'Syncing',
@@ -43,33 +44,34 @@ const DICTIONARY = {
     appName: 'Wrist Book',
     settings: 'Настройки',
     emptyTitle: 'Полка пуста',
-    emptySubtitle: 'Отправьте текст или файл с телефона',
+    emptySubtitle: 'Отправьте текст с телефона',
     deleteBook: 'Удалить',
     confirmDelete: 'Точно?',
     loading: 'Загрузка...',
     fileError: 'Ошибка файла',
     emptyFile: 'Пустой файл',
     readError: 'Ошибка чтения',
-    back: '← Назад',
+    back: '← Отмена',
+    save: 'Сохранить',
     language: 'Язык',
     langAuto: 'Авто',
     langEn: 'English',
     langRu: 'Русский',
     keepScreenOn: 'Не гасить экран',
-    enabled: 'ВКЛЮЧЕНО',
-    disabled: 'ВЫКЛЮЧЕНО',
+    customBrightness: 'Своя яркость',
+    enabled: 'ВКЛ',
+    disabled: 'ВЫКЛ',
     brightness: 'Яркость',
-    sampleText: 'Пример текста',
     fontSize: 'Размер шрифта',
-    bufferSize: 'Буфер (симв.)',
+    bufferSize: 'Окно памяти',
     edgePadding: 'Отступы сверху/снизу',
-    storageTitle: 'Память',
+    storageTitle: 'Сведения о памяти',
     storageUsed: 'Занято',
     storageBooks: 'Книги',
-    storageSystem: 'Кэш/Настр.',
+    storageSystem: 'Система',
     storageFree: 'Свободно',
     resetSettings: 'Сброс настроек',
-    resetConfirm: 'Точно сбросить?',
+    resetConfirm: 'Сбросить всё?',
     syncTitle: 'Синхронизация',
     statusWaiting: 'Ожидание...',
     statusConnected: 'Связь ОК',
@@ -80,29 +82,14 @@ const DICTIONARY = {
 };
 
 export function resolveLanguageCode(preferredMode) {
-  if (preferredMode === 'en' || preferredMode === 'ru') {
-    return preferredMode;
-  }
+  if (preferredMode === 'en' || preferredMode === 'ru') return preferredMode;
   try {
     const locale = configuration.getLocale();
-    if (locale && locale.language && locale.language.toLowerCase().indexOf('ru') === 0) {
-      return 'ru';
-    }
+    if (locale && locale.language && locale.language.toLowerCase().indexOf('ru') === 0) return 'ru';
   } catch (e) {}
   return 'en';
 }
 
 export function getStrings(preferredMode) {
-  const code = resolveLanguageCode(preferredMode || 'auto');
-  return DICTIONARY[code] || DICTIONARY.en;
-}
-
-export function applySafeBrightness(pct) {
-  const safePct = Math.max(10, Math.min(100, pct || 100));
-  const hwValue = Math.round(90 + ((safePct - 10) / 90) * 165);
-  const rgbChannel = Math.round(110 + ((safePct - 10) / 90) * 145);
-  return {
-    hwValue: hwValue,
-    textColor: `rgb(${rgbChannel},${rgbChannel},${rgbChannel})`
-  };
+  return DICTIONARY[resolveLanguageCode(preferredMode || 'auto')] || DICTIONARY.en;
 }
