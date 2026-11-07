@@ -39,7 +39,9 @@ export default {
     });
 
     this.statusSub = globalThis.wearableBridge.addStatusListener((status) => {
-      if (status === 'connected') this.statusText = this.strings.statusConnected;
+      if (status === 'connected') {
+        this.statusText = this.strings.statusConnected;
+      }
     });
 
     globalThis.bookReceiver.setTransferListener((event) => {
@@ -66,7 +68,9 @@ export default {
   },
 
   onDestroy() {
-    if (this.statusSub) globalThis.wearableBridge.removeStatusListener(this.statusSub);
+    if (this.statusSub) {
+      globalThis.wearableBridge.removeStatusListener(this.statusSub);
+    }
   },
 
   goBack() {
@@ -85,12 +89,14 @@ export default {
   align-items: center;
   padding: 30px 8px;
 }
+
 .title {
   color: #FFFFFF;
   font-size: 28px;
   font-weight: bold;
   text-align: center;
 }
+
 .file-name {
   width: 196px;
   color: #AAAAAA;
@@ -100,19 +106,22 @@ export default {
   lines: 2;
   text-overflow: ellipsis;
 }
+
 .status {
-  color: #888888;
+  color: #999999;
   font-size: 26px;
   font-weight: bold;
   margin-top: 14px;
   text-align: center;
 }
+
 .percent {
   color: #FFFFFF;
   font-size: 52px;
   font-weight: bold;
   margin-top: 12px;
 }
+
 .back-btn {
   width: 192px;
   height: 76px;
@@ -122,6 +131,7 @@ export default {
   justify-content: center;
   align-items: center;
 }
+
 .back-btn-txt {
   color: #FFFFFF;
   font-size: 28px;
