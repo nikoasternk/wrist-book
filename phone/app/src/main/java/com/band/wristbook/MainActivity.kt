@@ -79,7 +79,20 @@ class MainActivity : ComponentActivity() {
                     selectedFileName = cursor.getString(idx)
                 }
             }
-            selectedFileContent = contentResolver.openInputStream(it)?.bufferedReader(Charsets.UTF_8)?.use { r -> r.readText() }
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val bytes = contentResolver.openInputStream(it)?.use { s -> s.readBytes() }
+                if (bytes != null) {
+                    val utf8Text = bytes.toString(Charsets.UTF_8)
+                    val decoded = if (utf8Text.contains('\uFFFD')) {
+                        bytes.toString(java.nio.charset.Charset.forName("windows-1251"))
+                    } else {
+                        utf8Text
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        selectedFileContent = decoded
+                    }
+                }
+            }
         }
     }
 
