@@ -1,85 +1,63 @@
 <template>
   <div class="reader-page">
-    <div class="top-safe-zone" style="height: {{paddingY}}px;">
-      <text class="status-txt">{{clockTime}}</text>
-      <text class="status-txt">{{batteryLevel}}%</text>
+    <div class="top-bar">
+      <text class="time-txt">{{clockTime}}</text>
     </div>
 
     <scroll
       id="scrollViewport"
       class="scroll-area"
-      style="height: {{viewportHeight}}px;"
       scroll-y="true"
       @scroll="onScrollMove"
-      @scrollbottom="onScrollReachBottom">
+      @scrollbottom="onScrollBottom">
 
-      <div for="{{segments}}" class="segment-wrapper">
-        <div
-          if="{{$item.unloaded}}"
-          class="placeholder-box"
-          style="height: {{$item.height}}px;">
-        </div>
-        <text
-          else
-          class="book-text"
-          style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px; color: {{textColor}};">{{$item.text}}</text>
+      <div class="padding-spacer" style="height: {{paddingY}}px;"></div>
+      
+      <div for="{{segments}}" class="segment-box">
+        <text class="book-text" style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
       </div>
-    </scroll>
 
-    <div class="bottom-safe-zone" style="height: {{paddingY}}px;">
-      <text class="progress-txt">{{progressPercent}}%</text>
-    </div>
+      <div class="padding-spacer" style="height: {{paddingY}}px;"></div>
+    </scroll>
   </div>
 </template>
 
 <script>
-import battery from '@system.battery'
 import brightness from '@system.brightness'
 import storage from '@system.storage'
 import file from '@system.file'
-import { getStrings, applySafeBrightness } from '../../services/Localization'
+import { getStrings } from '../../services/Localization'
 
 export default {
   private: {
     strings: getStrings('auto'),
     clockTime: '00:00',
-    batteryLevel: 100,
     stayAwake: true,
-    brightnessPct: 100,
-    textColor: '#FFFFFF',
-    fontSize: 30,
-    lineHeight: 40,
+    fontSize: 24,
+    lineHeight: 34,
     paddingY: 36,
-    viewportHeight: 448,
-    windowChars: 1500,
-    chunkSize: 500,
+    windowChars: 2000,
+    chunkSize: 600,
     totalChars: 0,
     bookUri: '',
     bookName: '',
     segments: [],
-    nextSegmentId: 1,
     lastMeasuredTotalHeight: 0,
     currentScrollY: 0,
     isLoadingChunk: false,
     progressPercent: 0,
     clockTimer: null,
-    saveTimer: null
+    saveTimer: null,
+    viewportHeight: 520
   },
 
-  protected: {
-    uri: '',
-    name: ''
-  },
+  protected: { uri: '', name: '' },
 
   onInit() {
     this.bookUri = this.uri;
     this.bookName = this.name;
     this.updateClock();
-    this.clockTimer = setInterval(() => {
-      this.updateClock();
-      this.updateBattery();
-    }, 20000);
-    this.updateBattery();
+    this.clockTimer = setInterval(() => this.updateClock(), 30000);
   },
 
   onShow() {
@@ -100,39 +78,37 @@ export default {
 
   loadSettingsAndStart() {
     storage.get({
-      key: 'WRISTBOOK_CONFIG_V3',
+      key: 'WRISTBOOK_CONFIG',
       success: (data) => {
         let lang = 'auto';
         if (data) {
           const cfg = JSON.parse(data);
-          this.fontSize = cfg.fontSize || 30;
+          this.fontSize = cfg.fontSize || 24;
           this.lineHeight = Math.floor(this.fontSize * 1.35);
-          this.windowChars = Math.max(600, cfg.windowChars || 1500);
-          this.chunkSize = Math.max(300, Math.floor(this.windowChars / 3));
-          this.paddingY = Math.max(24, Math.min(100, cfg.paddingY !== undefined ? cfg.paddingY : 36));
+          this.windowChars = Math.max(800, cfg.windowChars || 2000);
+          this.chunkSize = Math.max(400, Math.floor(this.windowChars / 3));
+          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 36;
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
-          this.brightnessPct = cfg.brightnessPct || 100;
           lang = cfg.language || 'auto';
+          
+          if (cfg.customBrightness) {
+            const hwVal = Math.max(10, Math.min(255, Math.round((cfg.brightnessPct || 50) * 2.55)));
+            brightness.setMode({ mode: 0 });
+            brightness.setValue({ value: hwVal });
+          } else {
+            brightness.setMode({ mode: 1 });
+          }
         }
-        this.viewportHeight = Math.max(240, 520 - (this.paddingY * 2));
         this.strings = getStrings(lang);
-        const br = applySafeBrightness(this.brightnessPct);
-        this.textColor = br.textColor;
-        brightness.setMode({ mode: 0 });
-        brightness.setValue({ value: br.hwValue });
         brightness.setKeepScreenOn({ keepScreenOn: this.stayAwake });
 
-        if (this.segments.length === 0) {
-          this.initFileMetrics();
-        }
+        if (this.segments.length === 0) this.initFileMetrics();
       },
       fail: () => {
-        this.viewportHeight = 448;
+        brightness.setMode({ mode: 1 });
         this.strings = getStrings('auto');
         brightness.setKeepScreenOn({ keepScreenOn: true });
-        if (this.segments.length === 0) {
-          this.initFileMetrics();
-        }
+        if (this.segments.length === 0) this.initFileMetrics();
       }
     });
   },
@@ -145,14 +121,7 @@ export default {
         this.restoreStartOffset();
       },
       fail: () => {
-        this.segments = [{
-          id: 1,
-          startChar: 0,
-          charLen: 0,
-          text: this.strings.fileError,
-          height: 200,
-          unloaded: false
-        }];
+        this.segments = [{ text: this.strings.fileError }];
       }
     });
   },
@@ -162,8 +131,10 @@ export default {
       key: 'WRISTBOOK_PROGRESS',
       success: (data) => {
         const map = data ? JSON.parse(data) : {};
-        const startOffset = (map[this.bookName] && map[this.bookName].charOffset) ? map[this.bookName].charOffset : 0;
-        this.startStreamFrom(startOffset);
+        const savedOffset = (map[this.bookName] && map[this.bookName].charOffset) ? map[this.bookName].charOffset : 0;
+        // КЛЮЧЕВОЙ ФИКС: Загружаем текст за 1000 символов ДО сохраненного места, чтобы можно было скроллить назад без рывков.
+        const preOffset = Math.max(0, savedOffset - 1000);
+        this.startStreamFrom(preOffset);
       },
       fail: () => {
         this.startStreamFrom(0);
@@ -171,39 +142,20 @@ export default {
     });
   },
 
-  startStreamFrom(initialOffset) {
+  startStreamFrom(startPos) {
     if (this.totalChars <= 0) {
-      this.segments = [{
-        id: 1,
-        startChar: 0,
-        charLen: 0,
-        text: this.strings.emptyFile,
-        height: 200,
-        unloaded: false
-      }];
+      this.segments = [{ text: this.strings.emptyFile }];
       return;
     }
-
-    const safeStart = Math.max(0, Math.min(initialOffset, Math.max(0, this.totalChars - this.chunkSize)));
     this.segments = [];
-    this.lastMeasuredTotalHeight = 0;
-    this.appendNextChunk(safeStart, () => {
-      const lastSeg = this.segments[this.segments.length - 1];
-      if (lastSeg && (lastSeg.startChar + lastSeg.charLen) < this.totalChars) {
-        this.appendNextChunk(lastSeg.startChar + lastSeg.charLen);
-      }
-    });
+    this.appendNextChunk(startPos);
   },
 
-  appendNextChunk(startChar, onDone) {
-    if (this.isLoadingChunk || startChar >= this.totalChars) {
-      if (onDone) onDone();
-      return;
-    }
-
+  appendNextChunk(startChar) {
+    if (this.isLoadingChunk || startChar >= this.totalChars) return;
     this.isLoadingChunk = true;
+    
     const charsToRead = Math.min(this.chunkSize, this.totalChars - startChar);
-
     file.readArrayBuffer({
       uri: this.bookUri,
       position: startChar * 2,
@@ -214,152 +166,49 @@ export default {
         for (let i = 0; i + 1 < buf.length; i += 2) {
           str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
         }
-
-        const estLines = Math.max(4, Math.ceil(charsToRead / 11));
-        const fallbackHeight = estLines * this.lineHeight;
-
-        const segId = this.nextSegmentId++;
+        
         this.segments.push({
-          id: segId,
           startChar: startChar,
           charLen: charsToRead,
-          text: str,
-          height: fallbackHeight,
-          unloaded: false
+          text: str
         });
-
+        
+        this.pruneMemory();
         this.updateProgressMetric(startChar + charsToRead);
-
-        setTimeout(() => {
-          this.measureAndPrune(segId, fallbackHeight, () => {
-            this.isLoadingChunk = false;
-            if (onDone) onDone();
-          });
-        }, 60);
-      },
-      fail: () => {
         this.isLoadingChunk = false;
-        if (onDone) onDone();
-      }
+      },
+      fail: () => { this.isLoadingChunk = false; }
     });
   },
 
-  measureAndPrune(newSegId, fallbackHeight, callback) {
-    const scroller = this.$element('scrollViewport');
-    if (!scroller || !scroller.getScrollRect) {
-      this.pruneOldSegments();
-      if (callback) callback();
-      return;
+  pruneMemory() {
+    // В QuickApp движок сам оптимизирует скрытые DOM-узлы.
+    // Мы ограничиваем массив только для экономии RAM, удаляя самые старые блоки сверху.
+    let totalLoaded = 0;
+    for (let i = 0; i < this.segments.length; i++) {
+      totalLoaded += this.segments[i].charLen;
     }
-
-    scroller.getScrollRect({
-      success: (rect) => {
-        if (rect && rect.height > this.lastMeasuredTotalHeight) {
-          const deltaHeight = rect.height - this.lastMeasuredTotalHeight;
-          this.lastMeasuredTotalHeight = rect.height;
-          for (let i = 0; i < this.segments.length; i++) {
-            if (this.segments[i].id === newSegId) {
-              this.segments[i].height = deltaHeight > 20 ? deltaHeight : fallbackHeight;
-              break;
-            }
-          }
-        }
-        this.pruneOldSegments();
-        if (callback) callback();
-      },
-      fail: () => {
-        this.pruneOldSegments();
-        if (callback) callback();
-      }
-    });
-  },
-
-  pruneOldSegments() {
-    let activeChars = 0;
-    let activeCount = 0;
-
-    for (let i = this.segments.length - 1; i >= 0; i--) {
-      const seg = this.segments[i];
-      if (!seg.unloaded) {
-        activeChars += seg.charLen;
-        activeCount++;
-        if (activeCount > 2 && activeChars > this.windowChars) {
-          seg.unloaded = true;
-          seg.text = '';
-        }
-      }
+    while (totalLoaded > this.windowChars && this.segments.length > 3) {
+      const removed = this.segments.shift();
+      totalLoaded -= removed.charLen;
     }
-  },
-
-  reloadSegmentAt(index) {
-    if (this.isLoadingChunk || index < 0 || index >= this.segments.length) return;
-    const seg = this.segments[index];
-    if (!seg.unloaded) return;
-
-    this.isLoadingChunk = true;
-    file.readArrayBuffer({
-      uri: this.bookUri,
-      position: seg.startChar * 2,
-      length: seg.charLen * 2,
-      success: (res) => {
-        let str = '';
-        const buf = res.buffer;
-        for (let i = 0; i + 1 < buf.length; i += 2) {
-          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
-        }
-        seg.text = str;
-        seg.unloaded = false;
-        this.isLoadingChunk = false;
-      },
-      fail: () => {
-        this.isLoadingChunk = false;
-      }
-    });
   },
 
   onScrollMove(evt) {
     if (!evt || evt.scrollY === undefined) return;
     const scrollY = Math.max(0, evt.scrollY);
-    this.currentScrollY = scrollY;
-
-    let accHeight = 0;
-    let currentVisibleChar = 0;
-
-    for (let i = 0; i < this.segments.length; i++) {
-      const seg = this.segments[i];
-      const segBottom = accHeight + seg.height;
-
-      if (seg.unloaded && scrollY <= segBottom + 260 && scrollY >= accHeight - 260) {
-        this.reloadSegmentAt(i);
-      }
-
-      if (scrollY >= accHeight && scrollY <= segBottom) {
-        const ratio = seg.height > 0 ? Math.min(1, (scrollY - accHeight) / seg.height) : 0;
-        currentVisibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
-      }
-      accHeight = segBottom;
-    }
-
-    if (this.lastMeasuredTotalHeight > 0 && (scrollY + this.viewportHeight + 320) >= this.lastMeasuredTotalHeight) {
-      this.triggerNextChunkLoad();
-    }
-
-    if (currentVisibleChar > 0) {
-      this.updateProgressMetric(currentVisibleChar);
-      this.scheduleProgressSave(currentVisibleChar);
+    
+    // Эвристика прогресса: предполагаем, что прочитано пропорционально скроллу текущих блоков
+    if (this.segments.length > 0) {
+      const last = this.segments[this.segments.length - 1];
+      this.scheduleProgressSave(last.startChar);
     }
   },
 
-  onScrollReachBottom() {
-    this.triggerNextChunkLoad();
-  },
-
-  triggerNextChunkLoad() {
-    if (this.isLoadingChunk || this.segments.length === 0) return;
-    const lastSeg = this.segments[this.segments.length - 1];
-    const nextStart = lastSeg.startChar + lastSeg.charLen;
-    if (nextStart < this.totalChars) {
-      this.appendNextChunk(nextStart);
+  onScrollBottom() {
+    if (this.segments.length > 0) {
+      const last = this.segments[this.segments.length - 1];
+      this.appendNextChunk(last.startChar + last.charLen);
     }
   },
 
@@ -386,18 +235,12 @@ export default {
       key: 'WRISTBOOK_PROGRESS',
       success: (data) => {
         const map = data ? JSON.parse(data) : {};
-        map[this.bookName] = {
-          charOffset: offsetToSave,
-          percent: this.progressPercent
-        };
+        map[this.bookName] = { charOffset: offsetToSave, percent: this.progressPercent };
         storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
       },
       fail: () => {
         const map = {};
-        map[this.bookName] = {
-          charOffset: offsetToSave,
-          percent: this.progressPercent
-        };
+        map[this.bookName] = { charOffset: offsetToSave, percent: this.progressPercent };
         storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
       }
     });
@@ -406,14 +249,6 @@ export default {
   updateClock() {
     const d = new Date();
     this.clockTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  },
-
-  updateBattery() {
-    battery.getStatus({
-      success: (res) => {
-        this.batteryLevel = Math.floor(res.level * 100);
-      }
-    });
   }
 }
 </script>
@@ -424,62 +259,42 @@ export default {
   height: 520px;
   background-color: #000000;
   flex-direction: column;
-  align-items: center;
 }
-
-.top-safe-zone {
+.top-bar {
+  position: absolute;
+  top: 6px;
+  left: 0px;
   width: 212px;
-  padding: 0 22px 4px 22px;
-  background-color: #000000;
-  justify-content: space-between;
-  align-items: flex-end;
-  flex-shrink: 0;
+  height: 28px;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
 }
-
-.status-txt {
-  color: #888888;
+.time-txt {
+  color: #666666;
   font-size: 20px;
   font-weight: bold;
 }
-
 .scroll-area {
   width: 212px;
+  height: 520px;
   flex-direction: column;
   align-items: center;
+}
+.padding-spacer {
+  width: 200px;
   flex-shrink: 0;
 }
-
-.segment-wrapper {
+.segment-box {
   width: 196px;
   flex-direction: column;
   flex-shrink: 0;
 }
-
-.placeholder-box {
-  width: 196px;
-  flex-shrink: 0;
-}
-
 .book-text {
   width: 196px;
-  flex-shrink: 0;
-  font-weight: bold;
+  color: #E0E0E0;
   text-align: left;
   lines: -1;
-}
-
-.bottom-safe-zone {
-  width: 212px;
-  padding-top: 4px;
-  background-color: #000000;
-  justify-content: center;
-  align-items: flex-start;
   flex-shrink: 0;
-}
-
-.progress-txt {
-  color: #666666;
-  font-size: 18px;
-  font-weight: bold;
 }
 </style>
