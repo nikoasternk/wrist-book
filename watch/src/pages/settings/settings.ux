@@ -1,78 +1,80 @@
 <template>
   <div class="settings-page">
     <scroll class="settings-scroll" scroll-y="true">
-      <div class="settings-content">
-        <div class="back-btn" @click="goBack">
-          <text class="back-btn-txt">{{strings.back}}</text>
-        </div>
+      <div class="edge-spacer"></div>
 
-        <div class="card">
-          <text class="card-title">{{strings.language}}</text>
-          <div class="toggle-btn toggle-on" @click="cycleLanguage">
-            <text class="toggle-txt">{{languageLabel}}</text>
+      <div class="back-btn" @click="goBack">
+        <text class="back-btn-txt">{{strings.back}}</text>
+      </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.language}}</text>
+        <div class="toggle-btn toggle-on" @click="cycleLanguage">
+          <text class="toggle-txt">{{languageLabel}}</text>
+        </div>
+      </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.keepScreenOn}}</text>
+        <div class="toggle-btn {{stayAwake ? 'toggle-on' : 'toggle-off'}}" @click="toggleStayAwake">
+          <text class="toggle-txt">{{stayAwake ? strings.enabled : strings.disabled}}</text>
+        </div>
+      </div>
+
+      <div class="card-tall">
+        <text class="card-title">{{strings.brightness}}</text>
+        <text class="preview-txt" style="color: rgba(255,255,255,{{brightnessPct / 100}});">{{strings.sampleText}}</text>
+        <div class="ctrl-row">
+          <div class="ctrl-btn" @click="changeBrightness(-10)">
+            <text class="ctrl-btn-txt">-</text>
           </div>
-        </div>
-
-        <div class="card">
-          <text class="card-title">{{strings.keepScreenOn}}</text>
-          <div class="toggle-btn {{stayAwake ? 'toggle-on' : 'toggle-off'}}" @click="toggleStayAwake">
-            <text class="toggle-txt">{{stayAwake ? strings.enabled : strings.disabled}}</text>
-          </div>
-        </div>
-
-        <div class="card">
-          <text class="card-title">{{strings.brightness}}</text>
-          <text class="preview-txt" style="color: rgba(255,255,255,{{brightnessPct / 100}});">{{strings.sampleText}}</text>
-          <div class="ctrl-row">
-            <div class="ctrl-btn" @click="changeBrightness(-10)">
-              <text class="ctrl-btn-txt">-</text>
-            </div>
-            <text class="ctrl-val">{{brightnessPct}}%</text>
-            <div class="ctrl-btn" @click="changeBrightness(10)">
-              <text class="ctrl-btn-txt">+</text>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <text class="card-title">{{strings.fontSize}}</text>
-          <div class="ctrl-row">
-            <div class="ctrl-btn" @click="changeFont(-2)">
-              <text class="ctrl-btn-txt">-</text>
-            </div>
-            <text class="ctrl-val">{{fontSize}}</text>
-            <div class="ctrl-btn" @click="changeFont(2)">
-              <text class="ctrl-btn-txt">+</text>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <text class="card-title">{{strings.bufferSize}}</text>
-          <div class="ctrl-row">
-            <div class="ctrl-btn" @click="changeWindow(-500)">
-              <text class="ctrl-btn-txt">-</text>
-            </div>
-            <text class="ctrl-val">{{windowChars}}</text>
-            <div class="ctrl-btn" @click="changeWindow(500)">
-              <text class="ctrl-btn-txt">+</text>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <text class="card-title">{{strings.edgePadding}}</text>
-          <div class="ctrl-row">
-            <div class="ctrl-btn" @click="changePadding(-4)">
-              <text class="ctrl-btn-txt">-</text>
-            </div>
-            <text class="ctrl-val">{{paddingY}}</text>
-            <div class="ctrl-btn" @click="changePadding(4)">
-              <text class="ctrl-btn-txt">+</text>
-            </div>
+          <text class="ctrl-val">{{brightnessPct}}%</text>
+          <div class="ctrl-btn" @click="changeBrightness(10)">
+            <text class="ctrl-btn-txt">+</text>
           </div>
         </div>
       </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.fontSize}}</text>
+        <div class="ctrl-row">
+          <div class="ctrl-btn" @click="changeFont(-2)">
+            <text class="ctrl-btn-txt">-</text>
+          </div>
+          <text class="ctrl-val">{{fontSize}}</text>
+          <div class="ctrl-btn" @click="changeFont(2)">
+            <text class="ctrl-btn-txt">+</text>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.bufferSize}}</text>
+        <div class="ctrl-row">
+          <div class="ctrl-btn" @click="changeWindow(-500)">
+            <text class="ctrl-btn-txt">-</text>
+          </div>
+          <text class="ctrl-val">{{windowChars}}</text>
+          <div class="ctrl-btn" @click="changeWindow(500)">
+            <text class="ctrl-btn-txt">+</text>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.edgePadding}}</text>
+        <div class="ctrl-row">
+          <div class="ctrl-btn" @click="changePadding(-4)">
+            <text class="ctrl-btn-txt">-</text>
+          </div>
+          <text class="ctrl-val">{{paddingY}}px</text>
+          <div class="ctrl-btn" @click="changePadding(4)">
+            <text class="ctrl-btn-txt">+</text>
+          </div>
+        </div>
+      </div>
+
+      <div class="edge-spacer-bottom"></div>
     </scroll>
   </div>
 </template>
@@ -90,7 +92,7 @@ export default {
     languageLabel: 'Auto',
     windowChars: 1500,
     fontSize: 30,
-    paddingY: 38,
+    paddingY: 40,
     stayAwake: true,
     brightnessPct: 100
   },
@@ -103,7 +105,7 @@ export default {
           const cfg = JSON.parse(data);
           this.windowChars = cfg.windowChars || 1500;
           this.fontSize = cfg.fontSize || 30;
-          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 38;
+          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 40;
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.brightnessPct = cfg.brightnessPct || 100;
           this.language = cfg.language || 'auto';
@@ -165,7 +167,7 @@ export default {
   },
 
   changePadding(delta) {
-    this.paddingY = Math.max(16, Math.min(76, this.paddingY + delta));
+    this.paddingY = Math.max(16, Math.min(96, this.paddingY + delta));
     this.save();
   },
 
@@ -199,23 +201,31 @@ export default {
 .settings-scroll {
   width: 212px;
   height: 520px;
-}
-
-.settings-content {
-  width: 212px;
-  padding: 36px 6px 60px 6px;
   flex-direction: column;
   align-items: center;
+}
+
+.edge-spacer {
+  width: 200px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.edge-spacer-bottom {
+  width: 200px;
+  height: 56px;
+  flex-shrink: 0;
 }
 
 .back-btn {
   width: 200px;
   height: 76px;
+  flex-shrink: 0;
   background-color: #262626;
   border-radius: 28px;
   justify-content: center;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .back-btn-txt {
@@ -226,34 +236,49 @@ export default {
 
 .card {
   width: 200px;
+  height: 158px;
+  flex-shrink: 0;
   background-color: #1C1C1C;
   border-radius: 28px;
-  padding: 16px 10px;
+  padding: 14px 10px;
   margin-bottom: 12px;
   flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-tall {
+  width: 200px;
+  height: 192px;
+  flex-shrink: 0;
+  background-color: #1C1C1C;
+  border-radius: 28px;
+  padding: 14px 10px;
+  margin-bottom: 12px;
+  flex-direction: column;
+  justify-content: space-between;
   align-items: center;
 }
 
 .card-title {
   width: 180px;
   color: #FFFFFF;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: bold;
   text-align: center;
-  lines: -1;
+  lines: 2;
 }
 
 .preview-txt {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: bold;
-  margin-top: 6px;
 }
 
 .toggle-btn {
   width: 180px;
-  height: 72px;
+  height: 70px;
+  flex-shrink: 0;
   border-radius: 24px;
-  margin-top: 12px;
   justify-content: center;
   align-items: center;
 }
@@ -274,14 +299,16 @@ export default {
 
 .ctrl-row {
   width: 180px;
-  margin-top: 12px;
+  height: 64px;
+  flex-shrink: 0;
   justify-content: space-between;
   align-items: center;
 }
 
 .ctrl-btn {
-  width: 60px;
+  width: 58px;
   height: 64px;
+  flex-shrink: 0;
   background-color: #2E2E2E;
   border-radius: 20px;
   justify-content: center;
@@ -296,7 +323,7 @@ export default {
 
 .ctrl-val {
   color: #4C8DFF;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: bold;
 }
 </style>
