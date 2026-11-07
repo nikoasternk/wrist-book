@@ -5,11 +5,12 @@
       class="scroll-area"
       scroll-y="true"
       @scroll="onScrollMove"
+      @scrolltop="onScrollReachTop"
       @scrollbottom="onScrollReachBottom">
 
       <div class="edge-pad" style="height: {{paddingY}}px;"></div>
 
-      <div for="{{segments}}" class="segment-wrapper">
+      <div for="{{segments}}" tid="id" class="segment-wrapper">
         <div
           if="{{$item.unloaded}}"
           class="placeholder-box"
@@ -48,14 +49,15 @@ export default {
     fontSize: 28,
     lineHeight: 38,
     paddingY: 36,
-    windowChars: 1500,
-    chunkSize: 500,
+    windowChars: 2000,
+    chunkSize: 600,
     totalChars: 0,
     bookUri: '',
     bookName: '',
     segments: [],
-    isLoadingChunk: false,
-    isInitializingStream: false,
+    nextUniqueId: 1,
+    isBusy: false,
+    lastKnownScrollHeight: 0,
     lastActiveCharOffset: 0,
     progressPercent: 0,
     clockTimer: null,
@@ -70,6 +72,7 @@ export default {
   onInit() {
     this.bookUri = this.uri;
     this.bookName = this.name;
+    this.measuredHeights = {};
     this.updateClock();
     this.clockTimer = setInterval(() => {
       this.updateClock();
@@ -101,8 +104,8 @@ export default {
           const cfg = JSON.parse(data);
           this.fontSize = Math.max(8, Math.min(48, cfg.fontSize || 28));
           this.lineHeight = Math.max(10, Math.floor(this.fontSize * 1.35));
-          this.windowChars = Math.max(600, cfg.windowChars || 1500);
-          this.chunkSize = Math.max(300, Math.floor(this.windowChars / 3));
+          this.windowChars = Math.max(1000, cfg.windowChars || 2000);
+          this.chunkSize = Math.max(400, Math.floor(this.windowChars / 3));
           this.paddingY = Math.max(16, Math.min(120, cfg.paddingY !== undefined ? cfg.paddingY : 36));
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.customBrightness = cfg.customBrightness === true;
@@ -128,21 +131,6 @@ export default {
         }
       }
     });
-  },
-
-  estimateChunkHeight(charCount, textSample) {
-    const charsPerLine = Math.max(4, Math.floor(196 / (this.fontSize * 0.56)));
-    if (textSample) {
-      const lines = textSample.split('\n');
-      let count = 0;
-      for (let i = 0; i < lines.length; i++) {
-        const l = lines[i].length;
-        count += l === 0 ? 1 : Math.ceil(l / charsPerLine);
-      }
-      return Math.max(this.lineHeight * 2, count * this.lineHeight);
-    }
-    const estLines = Math.max(2, Math.ceil(charCount / charsPerLine));
-    return estLines * this.lineHeight;
   },
 
   initFileMetrics() {
@@ -173,15 +161,50 @@ export default {
         const startOffset = (map[this.bookName] && map[this.bookName].charOffset !== undefined)
           ? map[this.bookName].charOffset
           : 0;
-        this.buildInitialStream(startOffset);
+        this.startReadingSession(startOffset);
       },
       fail: () => {
-        this.buildInitialStream(0);
+        this.startReadingSession(0);
       }
     });
   },
 
-  buildInitialStream(savedOffset) {
+  readRawSlice(startChar, charLen, callback) {
+    file.readArrayBuffer({
+      uri: this.bookUri,
+      position: startChar * 2,
+      length: charLen * 2,
+      success: (res) => {
+        let str = '';
+        const buf = res.buffer;
+        for (let i = 0; i + 1 < buf.length; i += 2) {
+          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
+        }
+        callback(str);
+      },
+      fail: () => {
+        callback(null);
+      }
+    });
+  },
+
+  getScrollHeight(callback) {
+    const scroller = this.$element('scrollViewport');
+    if (!scroller || !scroller.getScrollRect) {
+      callback(0);
+      return;
+    }
+    scroller.getScrollRect({
+      success: (rect) => {
+        callback((rect && rect.height) ? rect.height : 0);
+      },
+      fail: () => {
+        callback(0);
+      }
+    });
+  },
+
+  startReadingSession(savedOffset) {
     if (this.totalChars <= 0) {
       this.segments = [{
         id: 1,
@@ -194,237 +217,237 @@ export default {
       return;
     }
 
-    this.isInitializingStream = true;
+    this.isBusy = true;
     const clampedOffset = Math.max(0, Math.min(savedOffset, Math.max(0, this.totalChars - 1)));
-    const targetSegIdx = Math.floor(clampedOffset / this.chunkSize);
-    const offsetInsideSeg = clampedOffset - (targetSegIdx * this.chunkSize);
-
-    const initialList = [];
-    const maxInitialSegIdx = Math.min(
-      Math.ceil(this.totalChars / this.chunkSize) - 1,
-      targetSegIdx + 1
-    );
-
-    for (let idx = 0; idx <= maxInitialSegIdx; idx++) {
-      const sChar = idx * this.chunkSize;
-      const cLen = Math.min(this.chunkSize, this.totalChars - sChar);
-      initialList.push({
-        id: idx + 1,
-        startChar: sChar,
-        charLen: cLen,
-        text: '',
-        height: this.estimateChunkHeight(cLen, null),
-        unloaded: true
-      });
-    }
-
-    this.segments = initialList;
     this.lastActiveCharOffset = clampedOffset;
     this.updateProgressMetric(clampedOffset);
 
-    const indicesToLoad = [];
-    if (targetSegIdx - 1 >= 0) indicesToLoad.push(targetSegIdx - 1);
-    indicesToLoad.push(targetSegIdx);
-    if (targetSegIdx + 1 <= maxInitialSegIdx) indicesToLoad.push(targetSegIdx + 1);
+    if (clampedOffset > 0) {
+      const prevStart = Math.max(0, clampedOffset - this.chunkSize);
+      const prevLen = clampedOffset - prevStart;
+      const currLen = Math.min(this.chunkSize, this.totalChars - clampedOffset);
 
-    this.loadMultipleSegmentsSequentially(indicesToLoad, 0, () => {
-      let scrollTargetY = 0;
-      for (let i = 0; i < targetSegIdx; i++) {
-        scrollTargetY += this.segments[i].height;
-      }
-      if (this.segments[targetSegIdx] && this.segments[targetSegIdx].charLen > 0) {
-        const frac = offsetInsideSeg / this.segments[targetSegIdx].charLen;
-        scrollTargetY += Math.floor(this.segments[targetSegIdx].height * frac);
-      }
+      this.readRawSlice(prevStart, prevLen, (prevText) => {
+        const id1 = this.nextUniqueId++;
+        this.segments = [{
+          id: id1,
+          startChar: prevStart,
+          charLen: prevLen,
+          text: prevText || '',
+          height: 300,
+          unloaded: false
+        }];
 
-      setTimeout(() => {
-        try {
-          if (scrollTargetY > 0) {
-            this.$element('scrollViewport').scrollTo({ top: scrollTargetY, behavior: 'instant' });
-          }
-        } catch (e) {}
-        this.isInitializingStream = false;
-      }, 80);
-    });
+        setTimeout(() => {
+          this.getScrollHeight((h1) => {
+            const seg1RealHeight = Math.max(80, h1 - (this.paddingY * 2));
+            this.measuredHeights[id1] = seg1RealHeight;
+
+            this.readRawSlice(clampedOffset, currLen, (currText) => {
+              const id2 = this.nextUniqueId++;
+              this.segments.push({
+                id: id2,
+                startChar: clampedOffset,
+                charLen: currLen,
+                text: currText || '',
+                height: 300,
+                unloaded: false
+              });
+
+              setTimeout(() => {
+                this.getScrollHeight((h2) => {
+                  const seg2RealHeight = Math.max(80, h2 - h1);
+                  this.measuredHeights[id2] = seg2RealHeight;
+                  this.lastKnownScrollHeight = h2;
+                  try {
+                    this.$element('scrollViewport').scrollTo({ top: seg1RealHeight, behavior: 'instant' });
+                  } catch (e) {}
+                  this.isBusy = false;
+                });
+              }, 50);
+            });
+          });
+        }, 50);
+      });
+    } else {
+      const firstLen = Math.min(this.chunkSize, this.totalChars);
+      this.readRawSlice(0, firstLen, (firstText) => {
+        const id1 = this.nextUniqueId++;
+        this.segments = [{
+          id: id1,
+          startChar: 0,
+          charLen: firstLen,
+          text: firstText || '',
+          height: 300,
+          unloaded: false
+        }];
+
+        setTimeout(() => {
+          this.getScrollHeight((h1) => {
+            this.measuredHeights[id1] = Math.max(80, h1 - (this.paddingY * 2));
+            this.lastKnownScrollHeight = h1;
+            this.isBusy = false;
+          });
+        }, 50);
+      });
+    }
   },
 
-  loadMultipleSegmentsSequentially(indices, pos, onComplete) {
-    if (pos >= indices.length) {
-      if (onComplete) onComplete();
-      return;
-    }
-    const segIdx = indices[pos];
-    this.loadSegmentText(segIdx, () => {
-      this.loadMultipleSegmentsSequentially(indices, pos + 1, onComplete);
-    });
-  },
+  onScrollReachBottom() {
+    if (this.isBusy || this.segments.length === 0) return;
 
-  loadSegmentText(index, onDone) {
-    if (index < 0 || index >= this.segments.length) {
-      if (onDone) onDone();
-      return;
-    }
-    const seg = this.segments[index];
-    if (!seg.unloaded) {
-      if (onDone) onDone();
-      return;
+    for (let i = 0; i < this.segments.length; i++) {
+      if (this.segments[i].unloaded && i >= this.segments.length - 2) {
+        this.reloadUnloadedSegment(i);
+        return;
+      }
     }
 
-    file.readArrayBuffer({
-      uri: this.bookUri,
-      position: seg.startChar * 2,
-      length: seg.charLen * 2,
-      success: (res) => {
-        let str = '';
-        const buf = res.buffer;
-        for (let i = 0; i + 1 < buf.length; i += 2) {
-          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
+    const lastSeg = this.segments[this.segments.length - 1];
+    const nextStart = lastSeg.startChar + lastSeg.charLen;
+    if (nextStart >= this.totalChars) return;
+
+    this.isBusy = true;
+    const charsToRead = Math.min(this.chunkSize, this.totalChars - nextStart);
+
+    this.getScrollHeight((heightBefore) => {
+      this.readRawSlice(nextStart, charsToRead, (str) => {
+        if (str === null) {
+          this.isBusy = false;
+          return;
         }
-        seg.height = this.estimateChunkHeight(seg.charLen, str);
-        seg.text = str;
-        seg.unloaded = false;
-        if (onDone) onDone();
-      },
-      fail: () => {
-        if (onDone) onDone();
-      }
-    });
-  },
-
-  appendNextChunk(startChar) {
-    if (this.isLoadingChunk || startChar >= this.totalChars) return;
-
-    this.isLoadingChunk = true;
-    const charsToRead = Math.min(this.chunkSize, this.totalChars - startChar);
-
-    file.readArrayBuffer({
-      uri: this.bookUri,
-      position: startChar * 2,
-      length: charsToRead * 2,
-      success: (res) => {
-        let str = '';
-        const buf = res.buffer;
-        for (let i = 0; i + 1 < buf.length; i += 2) {
-          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
-        }
-
-        const estH = this.estimateChunkHeight(charsToRead, str);
-        const segId = this.segments.length + 1;
-
+        const newId = this.nextUniqueId++;
         this.segments.push({
-          id: segId,
-          startChar: startChar,
+          id: newId,
+          startChar: nextStart,
           charLen: charsToRead,
           text: str,
-          height: estH,
+          height: 300,
           unloaded: false
         });
 
         setTimeout(() => {
-          this.refineNewSegmentHeight(this.segments.length - 1, () => {
-            this.pruneDistantSegments(this.segments.length - 1);
-            this.isLoadingChunk = false;
+          this.getScrollHeight((heightAfter) => {
+            if (heightAfter > heightBefore && heightBefore > 0) {
+              this.measuredHeights[newId] = heightAfter - heightBefore;
+              this.lastKnownScrollHeight = heightAfter;
+            }
+            this.unloadTopIfNeeded();
+            this.isBusy = false;
           });
         }, 50);
-      },
-      fail: () => {
-        this.isLoadingChunk = false;
-      }
+      });
     });
   },
 
-  refineNewSegmentHeight(segIdx, callback) {
-    const scroller = this.$element('scrollViewport');
-    if (!scroller || !scroller.getScrollRect || segIdx < 0 || segIdx >= this.segments.length) {
-      if (callback) callback();
-      return;
+  onScrollReachTop() {
+    if (this.isBusy || this.segments.length === 0) return;
+
+    for (let i = 0; i < Math.min(2, this.segments.length); i++) {
+      if (this.segments[i].unloaded) {
+        this.reloadUnloadedSegment(i);
+        return;
+      }
     }
 
-    scroller.getScrollRect({
-      success: (rect) => {
-        if (rect && rect.height > 0) {
-          let otherHeights = this.paddingY * 2;
-          for (let i = 0; i < this.segments.length; i++) {
-            if (i !== segIdx) {
-              otherHeights += this.segments[i].height;
-            }
-          }
-          const measured = rect.height - otherHeights;
-          if (measured > this.lineHeight) {
-            this.segments[segIdx].height = measured;
-          }
+    const firstSeg = this.segments[0];
+    if (firstSeg.startChar <= 0) return;
+
+    this.isBusy = true;
+    const prevStart = Math.max(0, firstSeg.startChar - this.chunkSize);
+    const charsToRead = firstSeg.startChar - prevStart;
+
+    this.getScrollHeight((heightBefore) => {
+      this.readRawSlice(prevStart, charsToRead, (str) => {
+        if (str === null) {
+          this.isBusy = false;
+          return;
         }
-        if (callback) callback();
-      },
-      fail: () => {
-        if (callback) callback();
-      }
+        const newId = this.nextUniqueId++;
+        this.segments.unshift({
+          id: newId,
+          startChar: prevStart,
+          charLen: charsToRead,
+          text: str,
+          height: 300,
+          unloaded: false
+        });
+
+        setTimeout(() => {
+          this.getScrollHeight((heightAfter) => {
+            const addedHeight = Math.max(80, heightAfter - heightBefore);
+            this.measuredHeights[newId] = addedHeight;
+            this.lastKnownScrollHeight = heightAfter;
+            try {
+              this.$element('scrollViewport').scrollTo({ top: addedHeight, behavior: 'instant' });
+            } catch (e) {}
+            this.isBusy = false;
+          });
+        }, 50);
+      });
     });
   },
 
-  pruneDistantSegments(centerIdx) {
-    const maxRadius = Math.max(2, Math.ceil(this.windowChars / this.chunkSize));
-    for (let i = 0; i < this.segments.length; i++) {
+  unloadTopIfNeeded() {
+    let activeChars = 0;
+    let activeCount = 0;
+    for (let i = this.segments.length - 1; i >= 0; i--) {
       const seg = this.segments[i];
-      if (!seg.unloaded && Math.abs(i - centerIdx) > maxRadius) {
-        seg.unloaded = true;
-        seg.text = '';
+      if (!seg.unloaded) {
+        activeChars += seg.charLen;
+        activeCount++;
+        if (activeCount > 4 && activeChars > this.windowChars && this.measuredHeights[seg.id]) {
+          seg.height = this.measuredHeights[seg.id];
+          seg.unloaded = true;
+          seg.text = '';
+        }
       }
     }
+  },
+
+  reloadUnloadedSegment(index) {
+    if (this.isBusy || index < 0 || index >= this.segments.length) return;
+    const seg = this.segments[index];
+    if (!seg.unloaded) return;
+
+    this.isBusy = true;
+    this.readRawSlice(seg.startChar, seg.charLen, (str) => {
+      if (str !== null) {
+        seg.text = str;
+        seg.unloaded = false;
+      }
+      this.isBusy = false;
+    });
   },
 
   onScrollMove(evt) {
-    if (this.isInitializingStream || !evt || evt.scrollY === undefined) return;
+    if (this.isBusy || !evt || evt.scrollY === undefined || this.segments.length === 0) return;
     const scrollY = Math.max(0, evt.scrollY);
 
     let accHeight = 0;
-    let activeIdx = 0;
-    let currentVisibleChar = 0;
+    let visibleChar = this.lastActiveCharOffset;
 
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const segBottom = accHeight + seg.height;
+      const segH = this.measuredHeights[seg.id] || seg.height || 300;
+      const segBottom = accHeight + segH;
+
+      if (seg.unloaded && scrollY <= segBottom + 150 && scrollY >= accHeight - 150) {
+        this.reloadUnloadedSegment(i);
+        break;
+      }
 
       if (scrollY >= accHeight && scrollY <= segBottom) {
-        activeIdx = i;
-        const ratio = seg.height > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / seg.height)) : 0;
-        currentVisibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
+        const ratio = segH > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / segH)) : 0;
+        visibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
         break;
       }
       accHeight = segBottom;
     }
 
-    for (let j = Math.max(0, activeIdx - 1); j <= Math.min(this.segments.length - 1, activeIdx + 1); j++) {
-      if (this.segments[j].unloaded && !this.isLoadingChunk) {
-        this.isLoadingChunk = true;
-        this.loadSegmentText(j, () => {
-          this.pruneDistantSegments(activeIdx);
-          this.isLoadingChunk = false;
-        });
-        break;
-      }
-    }
-
-    if (activeIdx >= this.segments.length - 2) {
-      this.triggerNextChunkLoad();
-    }
-
-    if (currentVisibleChar >= 0) {
-      this.updateProgressMetric(currentVisibleChar);
-      this.scheduleProgressSave(currentVisibleChar);
-    }
-  },
-
-  onScrollReachBottom() {
-    this.triggerNextChunkLoad();
-  },
-
-  triggerNextChunkLoad() {
-    if (this.isLoadingChunk || this.segments.length === 0) return;
-    const lastSeg = this.segments[this.segments.length - 1];
-    const nextStart = lastSeg.startChar + lastSeg.charLen;
-    if (nextStart < this.totalChars) {
-      this.appendNextChunk(nextStart);
+    if (visibleChar >= 0) {
+      this.updateProgressMetric(visibleChar);
+      this.scheduleProgressSave(visibleChar);
     }
   },
 
