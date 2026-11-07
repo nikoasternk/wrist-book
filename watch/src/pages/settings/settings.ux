@@ -23,7 +23,7 @@
 
       <div class="card-tall">
         <text class="card-title">{{strings.brightness}}</text>
-        <text class="preview-txt" style="color: rgba(255,255,255,{{brightnessPct / 100}});">{{strings.sampleText}}</text>
+        <text class="preview-txt" style="color: {{previewColor}};">{{strings.sampleText}}</text>
         <div class="ctrl-row">
           <div class="ctrl-btn" @click="changeBrightness(-10)">
             <text class="ctrl-btn-txt">-</text>
@@ -74,6 +74,21 @@
         </div>
       </div>
 
+      <div class="storage-card">
+        <text class="card-title">{{strings.storageTitle}}</text>
+        <text class="storage-line">{{strings.storageBooks}}: {{booksSizeText}} ({{booksCount}})</text>
+        <text class="storage-line">{{strings.storageSystem}}: {{sysSizeText}}</text>
+        <text class="storage-line">{{strings.storageUsed}}: {{totalUsedText}}</text>
+        <text class="storage-line-free">{{strings.storageFree}}: {{freeSpaceText}}</text>
+      </div>
+
+      <div class="card">
+        <text class="card-title">{{strings.resetSettings}}</text>
+        <div class="toggle-btn {{confirmReset ? 'reset-confirm-bg' : 'reset-bg'}}" @click="onResetTap">
+          <text class="toggle-txt">{{confirmReset ? strings.resetConfirm : strings.resetSettings}}</text>
+        </div>
+      </div>
+
       <div class="edge-spacer-bottom"></div>
     </scroll>
   </div>
@@ -82,8 +97,12 @@
 <script>
 import storage from '@system.storage'
 import brightness from '@system.brightness'
+import file from '@system.file'
+import device from '@system.device'
 import router from '@system.router'
-import { getStrings } from '../../services/Localization'
+import { getStrings, applySafeBrightness } from '../../services/Localization'
+
+const BOOKS_DIRECTORY = 'internal://files/books/';
 
 export default {
   private: {
@@ -92,31 +111,103 @@ export default {
     languageLabel: 'Auto',
     windowChars: 1500,
     fontSize: 30,
-    paddingY: 40,
+    paddingY: 36,
     stayAwake: true,
-    brightnessPct: 100
+    brightnessPct: 100,
+    previewColor: '#FFFFFF',
+    confirmReset: false,
+    booksCount: 0,
+    booksSizeText: '0 KB',
+    sysSizeText: '0.5 KB',
+    totalUsedText: '0.5 KB',
+    freeSpaceText: '...'
   },
 
   onInit() {
+    this.loadSettings();
+    this.inspectStorage();
+  },
+
+  loadSettings() {
     storage.get({
-      key: 'WRISTBOOK_CONFIG',
+      key: 'WRISTBOOK_CONFIG_V3',
       success: (data) => {
         if (data) {
           const cfg = JSON.parse(data);
           this.windowChars = cfg.windowChars || 1500;
           this.fontSize = cfg.fontSize || 30;
-          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 40;
+          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 36;
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.brightnessPct = cfg.brightnessPct || 100;
           this.language = cfg.language || 'auto';
         }
         this.applyLanguage();
+        this.applyBrightnessNow();
         brightness.setKeepScreenOn({ keepScreenOn: this.stayAwake });
       },
       fail: () => {
         this.applyLanguage();
+        this.applyBrightnessNow();
       }
     });
+  },
+
+  formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 KB';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(2) + ' MB';
+  },
+
+  inspectStorage() {
+    let booksBytes = 0;
+    let count = 0;
+    const sysBytes = 512;
+
+    file.list({
+      uri: BOOKS_DIRECTORY,
+      success: (data) => {
+        if (data && data.fileList) {
+          data.fileList.forEach(item => {
+            if (item.type === 'file') {
+              count++;
+              booksBytes += (item.length || 0);
+            }
+          });
+        }
+        this.booksCount = count;
+        this.booksSizeText = this.formatBytes(booksBytes);
+        this.sysSizeText = this.formatBytes(sysBytes);
+        this.totalUsedText = this.formatBytes(booksBytes + sysBytes);
+        this.queryDeviceSpace(booksBytes + sysBytes);
+      },
+      fail: () => {
+        this.booksCount = 0;
+        this.booksSizeText = '0 KB';
+        this.sysSizeText = this.formatBytes(sysBytes);
+        this.totalUsedText = this.formatBytes(sysBytes);
+        this.queryDeviceSpace(sysBytes);
+      }
+    });
+  },
+
+  queryDeviceSpace(usedByApp) {
+    if (device && device.getAvailableStorage) {
+      device.getAvailableStorage({
+        success: (res) => {
+          if (res && res.availableStorage !== undefined) {
+            this.freeSpaceText = this.formatBytes(res.availableStorage);
+          } else {
+            this.freeSpaceText = this.formatBytes(Math.max(0, 8388608 - usedByApp));
+          }
+        },
+        fail: () => {
+          this.freeSpaceText = this.formatBytes(Math.max(0, 8388608 - usedByApp));
+        }
+      });
+    } else {
+      this.freeSpaceText = this.formatBytes(Math.max(0, 8388608 - usedByApp));
+    }
   },
 
   applyLanguage() {
@@ -130,7 +221,15 @@ export default {
     }
   },
 
+  applyBrightnessNow() {
+    const br = applySafeBrightness(this.brightnessPct);
+    this.previewColor = br.textColor;
+    brightness.setMode({ mode: 0 });
+    brightness.setValue({ value: br.hwValue });
+  },
+
   cycleLanguage() {
+    this.confirmReset = false;
     if (this.language === 'auto') {
       this.language = 'en';
     } else if (this.language === 'en') {
@@ -143,37 +242,58 @@ export default {
   },
 
   toggleStayAwake() {
+    this.confirmReset = false;
     this.stayAwake = !this.stayAwake;
     brightness.setKeepScreenOn({ keepScreenOn: this.stayAwake });
     this.save();
   },
 
   changeBrightness(delta) {
+    this.confirmReset = false;
     this.brightnessPct = Math.max(10, Math.min(100, this.brightnessPct + delta));
-    const hwVal = Math.max(10, Math.min(255, Math.round(this.brightnessPct * 2.55)));
-    brightness.setMode({ mode: 0 });
-    brightness.setValue({ value: hwVal });
+    this.applyBrightnessNow();
     this.save();
   },
 
   changeWindow(delta) {
-    this.windowChars = Math.max(500, Math.min(15000, this.windowChars + delta));
+    this.confirmReset = false;
+    this.windowChars = Math.max(600, Math.min(15000, this.windowChars + delta));
     this.save();
   },
 
   changeFont(delta) {
+    this.confirmReset = false;
     this.fontSize = Math.max(20, Math.min(48, this.fontSize + delta));
     this.save();
   },
 
   changePadding(delta) {
-    this.paddingY = Math.max(16, Math.min(96, this.paddingY + delta));
+    this.confirmReset = false;
+    this.paddingY = Math.max(24, Math.min(96, this.paddingY + delta));
+    this.save();
+  },
+
+  onResetTap() {
+    if (!this.confirmReset) {
+      this.confirmReset = true;
+      return;
+    }
+    this.confirmReset = false;
+    this.language = 'auto';
+    this.stayAwake = true;
+    this.brightnessPct = 100;
+    this.fontSize = 30;
+    this.windowChars = 1500;
+    this.paddingY = 36;
+    this.applyLanguage();
+    this.applyBrightnessNow();
+    brightness.setKeepScreenOn({ keepScreenOn: true });
     this.save();
   },
 
   save() {
     storage.set({
-      key: 'WRISTBOOK_CONFIG',
+      key: 'WRISTBOOK_CONFIG_V3',
       value: JSON.stringify({
         language: this.language,
         windowChars: this.windowChars,
@@ -260,6 +380,35 @@ export default {
   align-items: center;
 }
 
+.storage-card {
+  width: 200px;
+  height: 214px;
+  flex-shrink: 0;
+  background-color: #1C1C1C;
+  border-radius: 28px;
+  padding: 14px 12px;
+  margin-bottom: 12px;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.storage-line {
+  width: 176px;
+  color: #CCCCCC;
+  font-size: 21px;
+  font-weight: bold;
+  lines: 1;
+}
+
+.storage-line-free {
+  width: 176px;
+  color: #4C8DFF;
+  font-size: 22px;
+  font-weight: bold;
+  lines: 1;
+}
+
 .card-title {
   width: 180px;
   color: #FFFFFF;
@@ -291,10 +440,20 @@ export default {
   background-color: #333333;
 }
 
+.reset-bg {
+  background-color: #3B1818;
+}
+
+.reset-confirm-bg {
+  background-color: #DC2626;
+}
+
 .toggle-txt {
   color: #FFFFFF;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: bold;
+  text-align: center;
+  lines: 1;
 }
 
 .ctrl-row {
