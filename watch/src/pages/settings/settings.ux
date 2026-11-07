@@ -180,6 +180,8 @@ export default {
     if (this.savedCustomBrightness) {
       brightness.setMode({ mode: 0 });
       brightness.setValue({ value: pctToHardwareBrightness(this.savedBrightnessPct) });
+    } else {
+      brightness.setMode({ mode: 1 });
     }
     brightness.setKeepScreenOn({ keepScreenOn: this.savedStayAwake });
   },
@@ -314,6 +316,8 @@ export default {
     if (this.customBrightness) {
       brightness.setMode({ mode: 0 });
       brightness.setValue({ value: pctToHardwareBrightness(this.brightnessPct) });
+    } else {
+      brightness.setMode({ mode: 1 });
     }
   },
 
