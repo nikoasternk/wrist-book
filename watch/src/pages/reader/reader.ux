@@ -10,14 +10,12 @@
 
       <div class="edge-pad" style="height: {{paddingY}}px;"></div>
 
-      <div for="{{segments}}" tid="id" class="segment-wrapper">
-        <div
-          if="{{$item.unloaded}}"
-          class="placeholder-box"
-          style="height: {{$item.height}}px;">
-        </div>
+      <div
+        for="{{segments}}"
+        tid="id"
+        class="segment-wrapper"
+        style="height: {{$item.lockedHeight}};">
         <text
-          else
           class="book-text"
           style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
       </div>
@@ -57,7 +55,7 @@ export default {
     segments: [],
     nextUniqueId: 1,
     isBusy: false,
-    lastKnownScrollHeight: 0,
+    currentActiveIndex: 0,
     lastActiveCharOffset: 0,
     progressPercent: 0,
     clockTimer: null,
@@ -146,7 +144,7 @@ export default {
           startChar: 0,
           charLen: 0,
           text: this.strings.fileError,
-          height: 200,
+          lockedHeight: 'auto',
           unloaded: false
         }];
       }
@@ -211,7 +209,7 @@ export default {
         startChar: 0,
         charLen: 0,
         text: this.strings.emptyFile,
-        height: 200,
+        lockedHeight: 'auto',
         unloaded: false
       }];
       return;
@@ -234,14 +232,15 @@ export default {
           startChar: prevStart,
           charLen: prevLen,
           text: prevText || '',
-          height: 300,
+          lockedHeight: 'auto',
           unloaded: false
         }];
 
         setTimeout(() => {
           this.getScrollHeight((h1) => {
-            const seg1RealHeight = Math.max(80, h1 - (this.paddingY * 2));
+            const seg1RealHeight = Math.max(60, h1 - (this.paddingY * 2));
             this.measuredHeights[id1] = seg1RealHeight;
+            this.segments[0].lockedHeight = seg1RealHeight + 'px';
 
             this.readRawSlice(clampedOffset, currLen, (currText) => {
               const id2 = this.nextUniqueId++;
@@ -250,24 +249,25 @@ export default {
                 startChar: clampedOffset,
                 charLen: currLen,
                 text: currText || '',
-                height: 300,
+                lockedHeight: 'auto',
                 unloaded: false
               });
+              this.currentActiveIndex = 1;
 
               setTimeout(() => {
                 this.getScrollHeight((h2) => {
-                  const seg2RealHeight = Math.max(80, h2 - h1);
+                  const seg2RealHeight = Math.max(60, h2 - h1);
                   this.measuredHeights[id2] = seg2RealHeight;
-                  this.lastKnownScrollHeight = h2;
+                  this.segments[1].lockedHeight = seg2RealHeight + 'px';
                   try {
                     this.$element('scrollViewport').scrollTo({ top: seg1RealHeight, behavior: 'instant' });
                   } catch (e) {}
                   this.isBusy = false;
                 });
-              }, 50);
+              }, 45);
             });
           });
-        }, 50);
+        }, 45);
       });
     } else {
       const firstLen = Math.min(this.chunkSize, this.totalChars);
@@ -278,17 +278,19 @@ export default {
           startChar: 0,
           charLen: firstLen,
           text: firstText || '',
-          height: 300,
+          lockedHeight: 'auto',
           unloaded: false
         }];
+        this.currentActiveIndex = 0;
 
         setTimeout(() => {
           this.getScrollHeight((h1) => {
-            this.measuredHeights[id1] = Math.max(80, h1 - (this.paddingY * 2));
-            this.lastKnownScrollHeight = h1;
+            const seg1RealHeight = Math.max(60, h1 - (this.paddingY * 2));
+            this.measuredHeights[id1] = seg1RealHeight;
+            this.segments[0].lockedHeight = seg1RealHeight + 'px';
             this.isBusy = false;
           });
-        }, 50);
+        }, 45);
       });
     }
   },
@@ -296,8 +298,8 @@ export default {
   onScrollReachBottom() {
     if (this.isBusy || this.segments.length === 0) return;
 
-    for (let i = 0; i < this.segments.length; i++) {
-      if (this.segments[i].unloaded && i >= this.segments.length - 2) {
+    for (let i = Math.max(0, this.segments.length - 2); i < this.segments.length; i++) {
+      if (this.segments[i].unloaded) {
         this.reloadUnloadedSegment(i);
         return;
       }
@@ -322,20 +324,23 @@ export default {
           startChar: nextStart,
           charLen: charsToRead,
           text: str,
-          height: 300,
+          lockedHeight: 'auto',
           unloaded: false
         });
+        const pushedIndex = this.segments.length - 1;
+        this.currentActiveIndex = pushedIndex;
 
         setTimeout(() => {
           this.getScrollHeight((heightAfter) => {
             if (heightAfter > heightBefore && heightBefore > 0) {
-              this.measuredHeights[newId] = heightAfter - heightBefore;
-              this.lastKnownScrollHeight = heightAfter;
+              const deltaH = heightAfter - heightBefore;
+              this.measuredHeights[newId] = deltaH;
+              this.segments[pushedIndex].lockedHeight = deltaH + 'px';
             }
-            this.unloadTopIfNeeded();
+            this.pruneOutsideWindow(pushedIndex);
             this.isBusy = false;
           });
-        }, 50);
+        }, 45);
       });
     });
   },
@@ -369,38 +374,37 @@ export default {
           startChar: prevStart,
           charLen: charsToRead,
           text: str,
-          height: 300,
+          lockedHeight: 'auto',
           unloaded: false
         });
+        this.currentActiveIndex = 0;
 
         setTimeout(() => {
           this.getScrollHeight((heightAfter) => {
-            const addedHeight = Math.max(80, heightAfter - heightBefore);
+            const addedHeight = Math.max(60, heightAfter - heightBefore);
             this.measuredHeights[newId] = addedHeight;
-            this.lastKnownScrollHeight = heightAfter;
+            this.segments[0].lockedHeight = addedHeight + 'px';
             try {
               this.$element('scrollViewport').scrollTo({ top: addedHeight, behavior: 'instant' });
             } catch (e) {}
+            this.pruneOutsideWindow(0);
             this.isBusy = false;
           });
-        }, 50);
+        }, 45);
       });
     });
   },
 
-  unloadTopIfNeeded() {
-    let activeChars = 0;
-    let activeCount = 0;
-    for (let i = this.segments.length - 1; i >= 0; i--) {
+  pruneOutsideWindow(centerIdx) {
+    const maxActiveCount = Math.max(3, Math.ceil(this.windowChars / this.chunkSize));
+    const allowedRadius = Math.max(1, Math.floor(maxActiveCount / 2));
+
+    for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      if (!seg.unloaded) {
-        activeChars += seg.charLen;
-        activeCount++;
-        if (activeCount > 4 && activeChars > this.windowChars && this.measuredHeights[seg.id]) {
-          seg.height = this.measuredHeights[seg.id];
-          seg.unloaded = true;
-          seg.text = '';
-        }
+      if (!seg.unloaded && Math.abs(i - centerIdx) > allowedRadius && this.measuredHeights[seg.id]) {
+        seg.lockedHeight = this.measuredHeights[seg.id] + 'px';
+        seg.text = '';
+        seg.unloaded = true;
       }
     }
   },
@@ -415,6 +419,8 @@ export default {
       if (str !== null) {
         seg.text = str;
         seg.unloaded = false;
+        this.currentActiveIndex = index;
+        this.pruneOutsideWindow(index);
       }
       this.isBusy = false;
     });
@@ -424,25 +430,31 @@ export default {
     if (this.isBusy || !evt || evt.scrollY === undefined || this.segments.length === 0) return;
     const scrollY = Math.max(0, evt.scrollY);
 
-    let accHeight = 0;
+    let accHeight = this.paddingY;
     let visibleChar = this.lastActiveCharOffset;
+    let foundIdx = this.currentActiveIndex;
 
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const segH = this.measuredHeights[seg.id] || seg.height || 300;
+      const segH = this.measuredHeights[seg.id] || 300;
       const segBottom = accHeight + segH;
 
-      if (seg.unloaded && scrollY <= segBottom + 150 && scrollY >= accHeight - 150) {
-        this.reloadUnloadedSegment(i);
-        break;
-      }
-
       if (scrollY >= accHeight && scrollY <= segBottom) {
+        foundIdx = i;
         const ratio = segH > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / segH)) : 0;
         visibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
         break;
       }
       accHeight = segBottom;
+    }
+
+    this.currentActiveIndex = foundIdx;
+
+    for (let j = Math.max(0, foundIdx - 1); j <= Math.min(this.segments.length - 1, foundIdx + 1); j++) {
+      if (this.segments[j].unloaded) {
+        this.reloadUnloadedSegment(j);
+        break;
+      }
     }
 
     if (visibleChar >= 0) {
@@ -521,11 +533,6 @@ export default {
 .segment-wrapper {
   width: 196px;
   flex-direction: column;
-  flex-shrink: 0;
-}
-
-.placeholder-box {
-  width: 196px;
   flex-shrink: 0;
 }
 
