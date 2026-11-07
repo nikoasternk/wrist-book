@@ -19,8 +19,10 @@
             <text class="book-sub">{{$item.percent}}%</text>
           </div>
 
-          <div class="del-btn" @click="onDeleteTap($item)">
-            <text class="del-btn-txt">{{confirmDeleteName === $item.name ? strings.confirmDelete : strings.deleteBook}}</text>
+          <div
+            class="{{confirmDeleteName === $item.name ? 'del-btn del-btn-confirm' : 'del-btn'}}"
+            @click="onDeleteTap($item)">
+            <text class="{{confirmDeleteName === $item.name ? 'del-btn-txt-confirm' : 'del-btn-txt'}}">{{confirmDeleteName === $item.name ? strings.confirmDelete : strings.deleteBook}}</text>
           </div>
         </div>
       </div>
@@ -40,7 +42,7 @@ import file from '@system.file'
 import storage from '@system.storage'
 import brightness from '@system.brightness'
 import router from '@system.router'
-import { getStrings } from '../../services/Localization'
+import { getStrings, pctToHardwareBrightness } from '../../services/Localization'
 
 const BOOKS_DIRECTORY = 'internal://files/books/';
 
@@ -64,23 +66,23 @@ export default {
       success: (data) => {
         let stayAwake = true;
         let lang = 'auto';
+        let customBrightness = false;
+        let pct = 80;
         if (data) {
           const cfg = JSON.parse(data);
           stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           lang = cfg.language || 'auto';
-          if (cfg.customBrightness) {
-            const hwVal = Math.max(10, Math.min(255, Math.round((cfg.brightnessPct || 50) * 2.55)));
-            brightness.setMode({ mode: 0 });
-            brightness.setValue({ value: hwVal });
-          } else {
-            brightness.setMode({ mode: 1 });
-          }
+          customBrightness = cfg.customBrightness === true;
+          pct = cfg.brightnessPct !== undefined ? cfg.brightnessPct : 80;
+        }
+        if (customBrightness) {
+          brightness.setMode({ mode: 0 });
+          brightness.setValue({ value: pctToHardwareBrightness(pct) });
         }
         this.strings = getStrings(lang);
         brightness.setKeepScreenOn({ keepScreenOn: stayAwake });
       },
       fail: () => {
-        brightness.setMode({ mode: 1 });
         this.strings = getStrings('auto');
         brightness.setKeepScreenOn({ keepScreenOn: true });
       }
@@ -132,13 +134,17 @@ export default {
       this.confirmDeleteName = item.name;
       return;
     }
+
     this.confirmDeleteName = '';
     file.delete({
       uri: item.uri,
       complete: () => {
         if (this.progressMap[item.name]) {
           delete this.progressMap[item.name];
-          storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(this.progressMap) });
+          storage.set({
+            key: 'WRISTBOOK_PROGRESS',
+            value: JSON.stringify(this.progressMap)
+          });
         }
         this.scanDirectory();
       }
@@ -147,7 +153,10 @@ export default {
 
   openBook(item) {
     this.confirmDeleteName = '';
-    router.push({ uri: 'pages/reader', params: { uri: item.uri, name: item.name } });
+    router.push({
+      uri: 'pages/reader',
+      params: { uri: item.uri, name: item.name }
+    });
   },
 
   openSettings() {
@@ -163,22 +172,26 @@ export default {
   height: 520px;
   background-color: #000000;
 }
+
 .main-scroll {
   width: 212px;
   height: 520px;
   flex-direction: column;
   align-items: center;
 }
+
 .edge-spacer {
   width: 200px;
   height: 36px;
   flex-shrink: 0;
 }
+
 .edge-spacer-bottom {
   width: 200px;
   height: 56px;
   flex-shrink: 0;
 }
+
 .app-title {
   width: 200px;
   height: 44px;
@@ -189,21 +202,24 @@ export default {
   text-align: center;
   margin-bottom: 12px;
 }
+
 .settings-btn {
   width: 200px;
   height: 76px;
   flex-shrink: 0;
-  background-color: #222222;
+  background-color: #262626;
   border-radius: 28px;
   justify-content: center;
   align-items: center;
   margin-bottom: 14px;
 }
+
 .settings-btn-txt {
   color: #FFFFFF;
-  font-size: 26px;
+  font-size: 28px;
   font-weight: bold;
 }
+
 .book-card {
   width: 200px;
   height: 154px;
@@ -215,12 +231,14 @@ export default {
   flex-direction: column;
   justify-content: space-between;
 }
+
 .book-open-zone {
   width: 176px;
   height: 72px;
   flex-shrink: 0;
   justify-content: flex-start;
 }
+
 .book-title {
   width: 176px;
   color: #FFFFFF;
@@ -230,6 +248,7 @@ export default {
   lines: 2;
   text-overflow: ellipsis;
 }
+
 .book-bottom-row {
   width: 176px;
   height: 48px;
@@ -237,29 +256,44 @@ export default {
   justify-content: space-between;
   align-items: center;
 }
+
 .percent-zone {
   height: 48px;
   justify-content: center;
   align-items: center;
 }
+
 .book-sub {
-  color: #AAAAAA;
+  color: #B0B0B0;
   font-size: 24px;
   font-weight: bold;
 }
+
 .del-btn {
   height: 46px;
   padding: 0 14px;
-  background-color: #333333;
+  background-color: #303030;
   border-radius: 18px;
   justify-content: center;
   align-items: center;
 }
+
+.del-btn-confirm {
+  background-color: #FFFFFF;
+}
+
 .del-btn-txt {
   color: #FFFFFF;
   font-size: 22px;
   font-weight: bold;
 }
+
+.del-btn-txt-confirm {
+  color: #000000;
+  font-size: 22px;
+  font-weight: bold;
+}
+
 .empty-box {
   width: 200px;
   height: 180px;
@@ -269,12 +303,15 @@ export default {
   justify-content: center;
   align-items: center;
 }
+
 .empty-title {
   color: #FFFFFF;
   font-size: 30px;
   font-weight: bold;
   text-align: center;
+  lines: -1;
 }
+
 .empty-desc {
   width: 184px;
   color: #888888;
