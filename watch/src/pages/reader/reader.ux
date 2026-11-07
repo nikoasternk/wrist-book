@@ -8,44 +8,26 @@
     <scroll
       id="scrollViewport"
       class="scroll-area"
-      scroll-y="true"
-      @click="toggleMenu">
+      scroll-y="true">
 
-      <div class="content-container" style="padding-top: {{paddingY}}px; padding-bottom: {{paddingY}}px;">
-        <div class="nav-btn-box" if="{{charOffset > 0}}" @click="loadPrevWindow">
-          <text class="nav-btn-txt">{{strings.prevBlock}}</text>
-        </div>
+      <div class="dynamic-spacer" style="height: {{paddingY}}px;"></div>
 
-        <text
-          class="book-text"
-          style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px; color: rgba(255,255,255,{{brightnessPct / 100}});">
-          {{windowText}}
-        </text>
-
-        <div class="nav-btn-box" if="{{hasMore}}" @click="loadNextWindow">
-          <text class="nav-btn-txt">{{strings.nextBlock}} ({{progressPercent}}%) ↓</text>
-        </div>
+      <div class="nav-btn-box" if="{{charOffset > 0}}" @click="loadPrevWindow">
+        <text class="nav-btn-txt">{{strings.prevBlock}}</text>
       </div>
-    </scroll>
 
-    <div class="menu-overlay" if="{{menuVisible}}">
-      <scroll class="menu-scroll" scroll-y="true">
-        <div class="menu-inner">
-          <div class="overlay-btn" @click="goBack">
-            <text class="overlay-btn-txt">{{strings.backToShelf}}</text>
-          </div>
-          <div class="overlay-btn" @click="openSettings">
-            <text class="overlay-btn-txt">{{strings.settings}}</text>
-          </div>
-          <div class="overlay-btn delete-btn" @click="deleteBook">
-            <text class="delete-btn-txt">{{confirmDelete ? strings.confirmDelete : strings.deleteBook}}</text>
-          </div>
-          <div class="overlay-btn" @click="toggleMenu">
-            <text class="overlay-btn-txt">{{strings.closeMenu}}</text>
-          </div>
-        </div>
-      </scroll>
-    </div>
+      <text
+        class="book-text"
+        style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px; color: rgba(255,255,255,{{brightnessPct / 100}});">
+        {{windowText}}
+      </text>
+
+      <div class="nav-btn-box" if="{{hasMore}}" @click="loadNextWindow">
+        <text class="nav-btn-txt">{{strings.nextBlock}} ({{progressPercent}}%) ↓</text>
+      </div>
+
+      <div class="dynamic-spacer" style="height: {{paddingY}}px;"></div>
+    </scroll>
   </div>
 </template>
 
@@ -54,7 +36,6 @@ import battery from '@system.battery'
 import brightness from '@system.brightness'
 import storage from '@system.storage'
 import file from '@system.file'
-import router from '@system.router'
 import { getStrings } from '../../services/Localization'
 
 export default {
@@ -62,13 +43,11 @@ export default {
     strings: getStrings('auto'),
     clockTime: '00:00',
     batteryLevel: 100,
-    menuVisible: false,
     stayAwake: true,
     brightnessPct: 100,
-    confirmDelete: false,
     fontSize: 30,
     lineHeight: 40,
-    paddingY: 38,
+    paddingY: 40,
     windowChars: 1500,
     minWindowChars: 400,
     charOffset: 0,
@@ -91,12 +70,14 @@ export default {
     this.bookName = this.name;
     this.windowText = this.strings.loading;
     this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 20000);
+    this.clockTimer = setInterval(() => {
+      this.updateClock();
+      this.updateBattery();
+    }, 20000);
     this.updateBattery();
   },
 
   onShow() {
-    this.confirmDelete = false;
     this.loadSettingsAndRead();
   },
 
@@ -119,7 +100,7 @@ export default {
           this.fontSize = cfg.fontSize || 30;
           this.lineHeight = Math.floor(this.fontSize * 1.35);
           this.windowChars = Math.max(cfg.windowChars || 1500, this.minWindowChars);
-          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 38;
+          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 40;
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
           this.brightnessPct = cfg.brightnessPct || 100;
           lang = cfg.language || 'auto';
@@ -249,19 +230,6 @@ export default {
     });
   },
 
-  deleteBook() {
-    if (!this.confirmDelete) {
-      this.confirmDelete = true;
-      return;
-    }
-    file.delete({
-      uri: this.bookUri,
-      complete: () => {
-        router.back();
-      }
-    });
-  },
-
   updateClock() {
     const d = new Date();
     this.clockTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -273,21 +241,6 @@ export default {
         this.batteryLevel = Math.floor(res.level * 100);
       }
     });
-  },
-
-  toggleMenu() {
-    this.menuVisible = !this.menuVisible;
-    this.confirmDelete = false;
-    this.updateBattery();
-  },
-
-  openSettings() {
-    this.menuVisible = false;
-    router.push({ uri: 'pages/settings' });
-  },
-
-  goBack() {
-    router.back();
   }
 }
 </script>
@@ -321,26 +274,28 @@ export default {
 .scroll-area {
   width: 212px;
   height: 520px;
+  flex-direction: column;
+  align-items: center;
 }
 
-.content-container {
-  width: 212px;
-  padding-left: 6px;
-  padding-right: 6px;
-  flex-direction: column;
+.dynamic-spacer {
+  width: 200px;
+  flex-shrink: 0;
 }
 
 .book-text {
-  width: 200px;
+  width: 196px;
+  flex-shrink: 0;
   font-weight: bold;
   text-align: left;
   lines: -1;
 }
 
 .nav-btn-box {
-  width: 200px;
-  min-height: 86px;
-  padding: 16px 10px;
+  width: 196px;
+  height: 86px;
+  flex-shrink: 0;
+  padding: 12px 10px;
   margin-top: 16px;
   margin-bottom: 16px;
   background-color: #262626;
@@ -351,59 +306,6 @@ export default {
 
 .nav-btn-txt {
   color: #4C8DFF;
-  font-size: 28px;
-  font-weight: bold;
-  text-align: center;
-  lines: -1;
-}
-
-.menu-overlay {
-  position: absolute;
-  top: 0px;
-  left: 0px;
-  width: 212px;
-  height: 520px;
-  background-color: rgba(0, 0, 0, 0.94);
-  z-index: 30;
-}
-
-.menu-scroll {
-  width: 212px;
-  height: 520px;
-}
-
-.menu-inner {
-  width: 212px;
-  padding: 40px 6px;
-  flex-direction: column;
-  align-items: center;
-}
-
-.overlay-btn {
-  width: 200px;
-  min-height: 82px;
-  padding: 14px 10px;
-  margin-bottom: 12px;
-  background-color: #262626;
-  border-radius: 28px;
-  justify-content: center;
-  align-items: center;
-}
-
-.overlay-btn-txt {
-  color: #FFFFFF;
-  font-size: 28px;
-  font-weight: bold;
-  text-align: center;
-  lines: -1;
-}
-
-.delete-btn {
-  background-color: #3B1818;
-}
-
-.delete-btn-txt {
-  color: #FF6B6B;
   font-size: 28px;
   font-weight: bold;
   text-align: center;
