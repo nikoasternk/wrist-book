@@ -1,24 +1,34 @@
 <template>
   <div class="reader-page">
-    <div class="top-bar">
-      <text class="time-txt">{{clockTime}}</text>
-    </div>
-
     <scroll
       id="scrollViewport"
       class="scroll-area"
       scroll-y="true"
       @scroll="onScrollMove"
-      @scrollbottom="onScrollBottom">
+      @scrollbottom="onScrollReachBottom">
 
-      <div class="padding-spacer" style="height: {{paddingY}}px;"></div>
-      
-      <div for="{{segments}}" class="segment-box">
-        <text class="book-text" style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
+      <div class="edge-pad" style="height: {{paddingY}}px;"></div>
+
+      <div for="{{segments}}" class="segment-wrapper">
+        <div
+          if="{{$item.unloaded}}"
+          class="placeholder-box"
+          style="height: {{$item.height}}px;">
+        </div>
+        <text
+          else
+          class="book-text"
+          style="font-size: {{fontSize}}px; line-height: {{lineHeight}}px;">{{$item.text}}</text>
       </div>
 
-      <div class="padding-spacer" style="height: {{paddingY}}px;"></div>
+      <div class="edge-pad" style="height: {{paddingY}}px;"></div>
     </scroll>
+
+    <div class="top-mask" style="height: {{paddingY}}px;">
+      <text class="clock-txt">{{clockTime}}</text>
+    </div>
+
+    <div class="bottom-mask" style="height: {{paddingY}}px;"></div>
   </div>
 </template>
 
@@ -26,38 +36,44 @@
 import brightness from '@system.brightness'
 import storage from '@system.storage'
 import file from '@system.file'
-import { getStrings } from '../../services/Localization'
+import { getStrings, pctToHardwareBrightness } from '../../services/Localization'
 
 export default {
   private: {
     strings: getStrings('auto'),
     clockTime: '00:00',
     stayAwake: true,
-    fontSize: 24,
-    lineHeight: 34,
+    customBrightness: false,
+    brightnessPct: 80,
+    fontSize: 28,
+    lineHeight: 38,
     paddingY: 36,
-    windowChars: 2000,
-    chunkSize: 600,
+    windowChars: 1500,
+    chunkSize: 500,
     totalChars: 0,
     bookUri: '',
     bookName: '',
     segments: [],
-    lastMeasuredTotalHeight: 0,
-    currentScrollY: 0,
     isLoadingChunk: false,
+    isInitializingStream: false,
+    lastActiveCharOffset: 0,
     progressPercent: 0,
     clockTimer: null,
-    saveTimer: null,
-    viewportHeight: 520
+    saveTimer: null
   },
 
-  protected: { uri: '', name: '' },
+  protected: {
+    uri: '',
+    name: ''
+  },
 
   onInit() {
     this.bookUri = this.uri;
     this.bookName = this.name;
     this.updateClock();
-    this.clockTimer = setInterval(() => this.updateClock(), 30000);
+    this.clockTimer = setInterval(() => {
+      this.updateClock();
+    }, 20000);
   },
 
   onShow() {
@@ -83,34 +99,50 @@ export default {
         let lang = 'auto';
         if (data) {
           const cfg = JSON.parse(data);
-          this.fontSize = cfg.fontSize || 24;
-          this.lineHeight = Math.floor(this.fontSize * 1.35);
-          this.windowChars = Math.max(800, cfg.windowChars || 2000);
-          this.chunkSize = Math.max(400, Math.floor(this.windowChars / 3));
-          this.paddingY = cfg.paddingY !== undefined ? cfg.paddingY : 36;
+          this.fontSize = Math.max(8, Math.min(48, cfg.fontSize || 28));
+          this.lineHeight = Math.max(10, Math.floor(this.fontSize * 1.35));
+          this.windowChars = Math.max(600, cfg.windowChars || 1500);
+          this.chunkSize = Math.max(300, Math.floor(this.windowChars / 3));
+          this.paddingY = Math.max(16, Math.min(120, cfg.paddingY !== undefined ? cfg.paddingY : 36));
           this.stayAwake = cfg.stayAwake !== undefined ? cfg.stayAwake : true;
+          this.customBrightness = cfg.customBrightness === true;
+          this.brightnessPct = cfg.brightnessPct !== undefined ? cfg.brightnessPct : 80;
           lang = cfg.language || 'auto';
-          
-          if (cfg.customBrightness) {
-            const hwVal = Math.max(10, Math.min(255, Math.round((cfg.brightnessPct || 50) * 2.55)));
-            brightness.setMode({ mode: 0 });
-            brightness.setValue({ value: hwVal });
-          } else {
-            brightness.setMode({ mode: 1 });
-          }
         }
         this.strings = getStrings(lang);
+        if (this.customBrightness) {
+          brightness.setMode({ mode: 0 });
+          brightness.setValue({ value: pctToHardwareBrightness(this.brightnessPct) });
+        }
         brightness.setKeepScreenOn({ keepScreenOn: this.stayAwake });
 
-        if (this.segments.length === 0) this.initFileMetrics();
+        if (this.segments.length === 0) {
+          this.initFileMetrics();
+        }
       },
       fail: () => {
-        brightness.setMode({ mode: 1 });
         this.strings = getStrings('auto');
         brightness.setKeepScreenOn({ keepScreenOn: true });
-        if (this.segments.length === 0) this.initFileMetrics();
+        if (this.segments.length === 0) {
+          this.initFileMetrics();
+        }
       }
     });
+  },
+
+  estimateChunkHeight(charCount, textSample) {
+    const charsPerLine = Math.max(4, Math.floor(196 / (this.fontSize * 0.56)));
+    if (textSample) {
+      const lines = textSample.split('\n');
+      let count = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i].length;
+        count += l === 0 ? 1 : Math.ceil(l / charsPerLine);
+      }
+      return Math.max(this.lineHeight * 2, count * this.lineHeight);
+    }
+    const estLines = Math.max(2, Math.ceil(charCount / charsPerLine));
+    return estLines * this.lineHeight;
   },
 
   initFileMetrics() {
@@ -121,7 +153,14 @@ export default {
         this.restoreStartOffset();
       },
       fail: () => {
-        this.segments = [{ text: this.strings.fileError }];
+        this.segments = [{
+          id: 1,
+          startChar: 0,
+          charLen: 0,
+          text: this.strings.fileError,
+          height: 200,
+          unloaded: false
+        }];
       }
     });
   },
@@ -131,31 +170,133 @@ export default {
       key: 'WRISTBOOK_PROGRESS',
       success: (data) => {
         const map = data ? JSON.parse(data) : {};
-        const savedOffset = (map[this.bookName] && map[this.bookName].charOffset) ? map[this.bookName].charOffset : 0;
-        // КЛЮЧЕВОЙ ФИКС: Загружаем текст за 1000 символов ДО сохраненного места, чтобы можно было скроллить назад без рывков.
-        const preOffset = Math.max(0, savedOffset - 1000);
-        this.startStreamFrom(preOffset);
+        const startOffset = (map[this.bookName] && map[this.bookName].charOffset !== undefined)
+          ? map[this.bookName].charOffset
+          : 0;
+        this.buildInitialStream(startOffset);
       },
       fail: () => {
-        this.startStreamFrom(0);
+        this.buildInitialStream(0);
       }
     });
   },
 
-  startStreamFrom(startPos) {
+  buildInitialStream(savedOffset) {
     if (this.totalChars <= 0) {
-      this.segments = [{ text: this.strings.emptyFile }];
+      this.segments = [{
+        id: 1,
+        startChar: 0,
+        charLen: 0,
+        text: this.strings.emptyFile,
+        height: 200,
+        unloaded: false
+      }];
       return;
     }
-    this.segments = [];
-    this.appendNextChunk(startPos);
+
+    this.isInitializingStream = true;
+    const clampedOffset = Math.max(0, Math.min(savedOffset, Math.max(0, this.totalChars - 1)));
+    const targetSegIdx = Math.floor(clampedOffset / this.chunkSize);
+    const offsetInsideSeg = clampedOffset - (targetSegIdx * this.chunkSize);
+
+    const initialList = [];
+    const maxInitialSegIdx = Math.min(
+      Math.ceil(this.totalChars / this.chunkSize) - 1,
+      targetSegIdx + 1
+    );
+
+    for (let idx = 0; idx <= maxInitialSegIdx; idx++) {
+      const sChar = idx * this.chunkSize;
+      const cLen = Math.min(this.chunkSize, this.totalChars - sChar);
+      initialList.push({
+        id: idx + 1,
+        startChar: sChar,
+        charLen: cLen,
+        text: '',
+        height: this.estimateChunkHeight(cLen, null),
+        unloaded: true
+      });
+    }
+
+    this.segments = initialList;
+    this.lastActiveCharOffset = clampedOffset;
+    this.updateProgressMetric(clampedOffset);
+
+    const indicesToLoad = [];
+    if (targetSegIdx - 1 >= 0) indicesToLoad.push(targetSegIdx - 1);
+    indicesToLoad.push(targetSegIdx);
+    if (targetSegIdx + 1 <= maxInitialSegIdx) indicesToLoad.push(targetSegIdx + 1);
+
+    this.loadMultipleSegmentsSequentially(indicesToLoad, 0, () => {
+      let scrollTargetY = 0;
+      for (let i = 0; i < targetSegIdx; i++) {
+        scrollTargetY += this.segments[i].height;
+      }
+      if (this.segments[targetSegIdx] && this.segments[targetSegIdx].charLen > 0) {
+        const frac = offsetInsideSeg / this.segments[targetSegIdx].charLen;
+        scrollTargetY += Math.floor(this.segments[targetSegIdx].height * frac);
+      }
+
+      setTimeout(() => {
+        try {
+          if (scrollTargetY > 0) {
+            this.$element('scrollViewport').scrollTo({ top: scrollTargetY, behavior: 'instant' });
+          }
+        } catch (e) {}
+        this.isInitializingStream = false;
+      }, 80);
+    });
+  },
+
+  loadMultipleSegmentsSequentially(indices, pos, onComplete) {
+    if (pos >= indices.length) {
+      if (onComplete) onComplete();
+      return;
+    }
+    const segIdx = indices[pos];
+    this.loadSegmentText(segIdx, () => {
+      this.loadMultipleSegmentsSequentially(indices, pos + 1, onComplete);
+    });
+  },
+
+  loadSegmentText(index, onDone) {
+    if (index < 0 || index >= this.segments.length) {
+      if (onDone) onDone();
+      return;
+    }
+    const seg = this.segments[index];
+    if (!seg.unloaded) {
+      if (onDone) onDone();
+      return;
+    }
+
+    file.readArrayBuffer({
+      uri: this.bookUri,
+      position: seg.startChar * 2,
+      length: seg.charLen * 2,
+      success: (res) => {
+        let str = '';
+        const buf = res.buffer;
+        for (let i = 0; i + 1 < buf.length; i += 2) {
+          str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
+        }
+        seg.height = this.estimateChunkHeight(seg.charLen, str);
+        seg.text = str;
+        seg.unloaded = false;
+        if (onDone) onDone();
+      },
+      fail: () => {
+        if (onDone) onDone();
+      }
+    });
   },
 
   appendNextChunk(startChar) {
     if (this.isLoadingChunk || startChar >= this.totalChars) return;
+
     this.isLoadingChunk = true;
-    
     const charsToRead = Math.min(this.chunkSize, this.totalChars - startChar);
+
     file.readArrayBuffer({
       uri: this.bookUri,
       position: startChar * 2,
@@ -166,55 +307,131 @@ export default {
         for (let i = 0; i + 1 < buf.length; i += 2) {
           str += String.fromCharCode((buf[i + 1] << 8) | buf[i]);
         }
-        
+
+        const estH = this.estimateChunkHeight(charsToRead, str);
+        const segId = this.segments.length + 1;
+
         this.segments.push({
+          id: segId,
           startChar: startChar,
           charLen: charsToRead,
-          text: str
+          text: str,
+          height: estH,
+          unloaded: false
         });
-        
-        this.pruneMemory();
-        this.updateProgressMetric(startChar + charsToRead);
-        this.isLoadingChunk = false;
+
+        setTimeout(() => {
+          this.refineNewSegmentHeight(this.segments.length - 1, () => {
+            this.pruneDistantSegments(this.segments.length - 1);
+            this.isLoadingChunk = false;
+          });
+        }, 50);
       },
-      fail: () => { this.isLoadingChunk = false; }
+      fail: () => {
+        this.isLoadingChunk = false;
+      }
     });
   },
 
-  pruneMemory() {
-    // В QuickApp движок сам оптимизирует скрытые DOM-узлы.
-    // Мы ограничиваем массив только для экономии RAM, удаляя самые старые блоки сверху.
-    let totalLoaded = 0;
-    for (let i = 0; i < this.segments.length; i++) {
-      totalLoaded += this.segments[i].charLen;
+  refineNewSegmentHeight(segIdx, callback) {
+    const scroller = this.$element('scrollViewport');
+    if (!scroller || !scroller.getScrollRect || segIdx < 0 || segIdx >= this.segments.length) {
+      if (callback) callback();
+      return;
     }
-    while (totalLoaded > this.windowChars && this.segments.length > 3) {
-      const removed = this.segments.shift();
-      totalLoaded -= removed.charLen;
+
+    scroller.getScrollRect({
+      success: (rect) => {
+        if (rect && rect.height > 0) {
+          let otherHeights = this.paddingY * 2;
+          for (let i = 0; i < this.segments.length; i++) {
+            if (i !== segIdx) {
+              otherHeights += this.segments[i].height;
+            }
+          }
+          const measured = rect.height - otherHeights;
+          if (measured > this.lineHeight) {
+            this.segments[segIdx].height = measured;
+          }
+        }
+        if (callback) callback();
+      },
+      fail: () => {
+        if (callback) callback();
+      }
+    });
+  },
+
+  pruneDistantSegments(centerIdx) {
+    const maxRadius = Math.max(2, Math.ceil(this.windowChars / this.chunkSize));
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i];
+      if (!seg.unloaded && Math.abs(i - centerIdx) > maxRadius) {
+        seg.unloaded = true;
+        seg.text = '';
+      }
     }
   },
 
   onScrollMove(evt) {
-    if (!evt || evt.scrollY === undefined) return;
+    if (this.isInitializingStream || !evt || evt.scrollY === undefined) return;
     const scrollY = Math.max(0, evt.scrollY);
-    
-    // Эвристика прогресса: предполагаем, что прочитано пропорционально скроллу текущих блоков
-    if (this.segments.length > 0) {
-      const last = this.segments[this.segments.length - 1];
-      this.scheduleProgressSave(last.startChar);
+
+    let accHeight = 0;
+    let activeIdx = 0;
+    let currentVisibleChar = 0;
+
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i];
+      const segBottom = accHeight + seg.height;
+
+      if (scrollY >= accHeight && scrollY <= segBottom) {
+        activeIdx = i;
+        const ratio = seg.height > 0 ? Math.min(1, Math.max(0, (scrollY - accHeight) / seg.height)) : 0;
+        currentVisibleChar = seg.startChar + Math.floor(seg.charLen * ratio);
+        break;
+      }
+      accHeight = segBottom;
+    }
+
+    for (let j = Math.max(0, activeIdx - 1); j <= Math.min(this.segments.length - 1, activeIdx + 1); j++) {
+      if (this.segments[j].unloaded && !this.isLoadingChunk) {
+        this.isLoadingChunk = true;
+        this.loadSegmentText(j, () => {
+          this.pruneDistantSegments(activeIdx);
+          this.isLoadingChunk = false;
+        });
+        break;
+      }
+    }
+
+    if (activeIdx >= this.segments.length - 2) {
+      this.triggerNextChunkLoad();
+    }
+
+    if (currentVisibleChar >= 0) {
+      this.updateProgressMetric(currentVisibleChar);
+      this.scheduleProgressSave(currentVisibleChar);
     }
   },
 
-  onScrollBottom() {
-    if (this.segments.length > 0) {
-      const last = this.segments[this.segments.length - 1];
-      this.appendNextChunk(last.startChar + last.charLen);
+  onScrollReachBottom() {
+    this.triggerNextChunkLoad();
+  },
+
+  triggerNextChunkLoad() {
+    if (this.isLoadingChunk || this.segments.length === 0) return;
+    const lastSeg = this.segments[this.segments.length - 1];
+    const nextStart = lastSeg.startChar + lastSeg.charLen;
+    if (nextStart < this.totalChars) {
+      this.appendNextChunk(nextStart);
     }
   },
 
   updateProgressMetric(charPos) {
     if (this.totalChars > 0) {
-      this.progressPercent = Math.min(100, Math.max(1, Math.floor((charPos / this.totalChars) * 100)));
+      const reachedEnd = Math.min(this.totalChars, charPos + this.chunkSize);
+      this.progressPercent = Math.min(100, Math.max(0, Math.floor((reachedEnd / this.totalChars) * 100)));
     }
   },
 
@@ -224,7 +441,7 @@ export default {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.flushProgressNow();
-    }, 2500);
+    }, 2000);
   },
 
   flushProgressNow() {
@@ -235,12 +452,18 @@ export default {
       key: 'WRISTBOOK_PROGRESS',
       success: (data) => {
         const map = data ? JSON.parse(data) : {};
-        map[this.bookName] = { charOffset: offsetToSave, percent: this.progressPercent };
+        map[this.bookName] = {
+          charOffset: offsetToSave,
+          percent: this.progressPercent
+        };
         storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
       },
       fail: () => {
         const map = {};
-        map[this.bookName] = { charOffset: offsetToSave, percent: this.progressPercent };
+        map[this.bookName] = {
+          charOffset: offsetToSave,
+          percent: this.progressPercent
+        };
         storage.set({ key: 'WRISTBOOK_PROGRESS', value: JSON.stringify(map) });
       }
     });
@@ -258,43 +481,64 @@ export default {
   width: 212px;
   height: 520px;
   background-color: #000000;
-  flex-direction: column;
 }
-.top-bar {
-  position: absolute;
-  top: 6px;
-  left: 0px;
-  width: 212px;
-  height: 28px;
-  justify-content: center;
-  align-items: center;
-  z-index: 10;
-}
-.time-txt {
-  color: #666666;
-  font-size: 20px;
-  font-weight: bold;
-}
+
 .scroll-area {
   width: 212px;
   height: 520px;
   flex-direction: column;
   align-items: center;
 }
-.padding-spacer {
-  width: 200px;
+
+.edge-pad {
+  width: 196px;
   flex-shrink: 0;
 }
-.segment-box {
+
+.segment-wrapper {
   width: 196px;
   flex-direction: column;
   flex-shrink: 0;
 }
+
+.placeholder-box {
+  width: 196px;
+  flex-shrink: 0;
+}
+
 .book-text {
   width: 196px;
-  color: #E0E0E0;
+  color: #FFFFFF;
+  flex-shrink: 0;
+  font-weight: bold;
   text-align: left;
   lines: -1;
-  flex-shrink: 0;
+}
+
+.top-mask {
+  position: absolute;
+  top: 0px;
+  left: 0px;
+  width: 212px;
+  background-color: #000000;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 4px;
+}
+
+.clock-txt {
+  width: 212px;
+  color: #888888;
+  font-size: 20px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.bottom-mask {
+  position: absolute;
+  bottom: 0px;
+  left: 0px;
+  width: 212px;
+  background-color: #000000;
 }
 </style>
