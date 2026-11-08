@@ -187,7 +187,6 @@ export default {
     }
   },
 
-  // Чтение вперёд: возвращаем точный consumedLen до отрезания '\n', чтобы '\n' не переезжал в следующий чанк
   readCleanSlice(startChar, maxLen, callback) {
     if (startChar >= this.totalChars || maxLen <= 0) {
       callback(null, 0);
@@ -226,7 +225,6 @@ export default {
     });
   },
 
-  // Чтение назад: выравниваем начало куска по пробелу или переносу строки, чтобы не резать слова
   readCleanSliceBackward(endChar, maxLen, callback) {
     if (endChar <= 0 || maxLen <= 0) {
       callback(null, 0, 0);
@@ -440,8 +438,6 @@ export default {
       }
 
       const newId = this.nextUniqueId++;
-      // Оставляем boxHeight: 'auto' на всё время, пока сегмент загружен,
-      // чтобы не вызывать повторный пересчёт высоты DOM и микро-рывок!
       this.segments.push({
         id: newId,
         startChar: nextStart,
@@ -541,7 +537,6 @@ export default {
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
       if (!seg.unloaded && Math.abs(i - center) > allowedRadius && this.measuredHeights[seg.id]) {
-        // Фиксируем высоту в пикселях ТОЛЬКО перед выгрузкой текста в покое
         seg.boxHeight = this.measuredHeights[seg.id] + 'px';
         seg.text = '';
         seg.unloaded = true;
@@ -622,7 +617,6 @@ export default {
       }
     }
 
-    // Заблаговременная подгрузка за 950px до конца (почти 2 экрана запаса)
     if (this.lastKnownScrollHeight > 0 && (scrollY + 520 + 950) >= this.lastKnownScrollHeight) {
       this.triggerNextChunkLoad();
       return;
